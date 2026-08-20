@@ -175,3 +175,63 @@ describe("nephele's own sidecars are declared to the engine", () => {
         assert.ok(!onDisk.includes('solo.md.nephelemeta'), 'emulate must not write a sidecar')
     })
 })
+
+describe('known nephele non-compliance, pinned', () => {
+    // Found with litmus 0.13 (see README). These assertions describe what the
+    // dependency does TODAY, wrongly, so that an upgrade which fixes it fails
+    // here and gets noticed rather than silently changing behaviour.
+    const dav = (method, p, headers = {}) => fetch(`http://127.0.0.1:${port}/webdav/${p}`, {
+        method, headers: { authorization: AUTH, ...headers },
+    })
+    const origin = () => `http://127.0.0.1:${port}`
+
+    it('COPY with Overwrite: F protects the destination but reports 207, not 412', async () => {
+        // RFC 4918 §9.8.5 requires 412 as the RESPONSE status. Nephele
+        // returns 207 with the 412 inside the multistatus body, so a client
+        // sees a 2xx and believes the copy happened.
+        //
+        // The safe half holds: the destination is NOT clobbered. The unsafe
+        // half is the false success.
+        await fetch(`${origin()}/webdav/emulated/ow-src.md`, {
+            method: 'PUT', headers: { authorization: AUTH }, body: 'SOURCE',
+        })
+        await fetch(`${origin()}/webdav/emulated/ow-dst.md`, {
+            method: 'PUT', headers: { authorization: AUTH }, body: 'ORIGINAL',
+        })
+
+        const res = await dav('COPY', 'emulated/ow-src.md', {
+            destination: `${origin()}/webdav/emulated/ow-dst.md`,
+            overwrite: 'F',
+        })
+        assert.equal(res.status, 207, 'if this becomes 412, nephele fixed it — update the README')
+        assert.match(await res.text(), /412 Precondition Failed/)
+
+        const after = await (await dav('GET', 'emulated/ow-dst.md')).text()
+        assert.equal(after, 'ORIGINAL', 'the destination must not be clobbered')
+    })
+
+    it('MOVE with Overwrite: F behaves the same way', async () => {
+        await fetch(`${origin()}/webdav/emulated/mv-src.md`, {
+            method: 'PUT', headers: { authorization: AUTH }, body: 'SOURCE',
+        })
+        await fetch(`${origin()}/webdav/emulated/mv-dst.md`, {
+            method: 'PUT', headers: { authorization: AUTH }, body: 'ORIGINAL',
+        })
+        const res = await dav('MOVE', 'emulated/mv-src.md', {
+            destination: `${origin()}/webdav/emulated/mv-dst.md`,
+            overwrite: 'F',
+        })
+        assert.equal(res.status, 207)
+        assert.equal(await (await dav('GET', 'emulated/mv-dst.md')).text(), 'ORIGINAL')
+        assert.equal((await dav('GET', 'emulated/mv-src.md')).status, 200, 'the source survives')
+    })
+
+    it('a malformed PROPFIND body answers 500 where 400 is required', async () => {
+        const res = await fetch(`${origin()}/webdav/emulated/`, {
+            method: 'PROPFIND',
+            headers: { authorization: AUTH, 'content-type': 'text/xml', depth: '0' },
+            body: '<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop>',   // unterminated
+        })
+        assert.equal(res.status, 500, 'if this becomes 400, nephele fixed it')
+    })
+})

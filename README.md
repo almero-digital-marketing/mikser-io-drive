@@ -144,6 +144,45 @@ creates an empty file** (RFC 4918 §9.10.4). A client that locks before writing
 — Finder's Save As does — leaves an empty document behind even if the write
 never arrives.
 
+## litmus compliance
+
+Scored with [litmus](https://github.com/tolsen/litmus) 0.13, the WebDAV
+compliance suite from the neon project. Two endpoints, because the shipped
+default deliberately does not store what it is asked to store:
+
+| suite | `emulate` (default) | `meta-files` |
+| --- | --- | --- |
+| basic | **16/16** | **16/16** |
+| copymove | 11/13 | 11/13 |
+| props | 20/30 | **27/30** |
+| locks | 9/13 | **37/41** |
+| http | **4/4** | **4/4** |
+
+The `emulate` column is the trade working as intended: it reports success for
+dead properties and locks without storing them, so litmus reads them back and
+finds nothing. Choose `meta-files` if compliance matters more than a clean
+content folder.
+
+The `meta-files` column is the fair measure of the dependency, and it has four
+real gaps — all upstream in nephele, all pinned in `test/protocol.test.js` so
+an upgrade that fixes them fails loudly rather than changing behaviour quietly:
+
+- **`COPY`/`MOVE` with `Overwrite: F` returns `207`, not `412`** (RFC 4918
+  §9.8.5). The safe half holds — the destination is *not* clobbered — but the
+  client is told the operation succeeded. Measured with a real client:
+  `copyFile(src, dst, { overwrite: false })` **resolves**, and the destination
+  is unchanged. Scripts that copy-if-absent and then read the destination
+  expecting the source's content will be wrong.
+- **A malformed PROPFIND body answers `500`, not `400`.**
+- **`propget` loses a dead property in a foreign namespace.**
+- **`UNLOCK` accepts a bogus lock token**, so one client can release another's
+  lock. DAV locks are advisory here anyway — mikser's renderer does not honour
+  them — but it means locking is not a concurrency control you can lean on.
+
+Two warnings litmus raises that are worth knowing rather than fixing: `DELETE`
+with a fragment in the Request-URI removes the collection, and `COPY` into a
+non-existent collection answers `404` where `409` is specified.
+
 ## Why writes are staged
 
 Measured, not assumed. `@nephele/adapter-file-system` writes like this:
