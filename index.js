@@ -1,10 +1,24 @@
 import path from 'node:path'
 
-import { registerRoute, resolveAuth, reachabilityOf, isLoopback } from 'mikser-io'
+import { registerRoute, resolveAuth, reachabilityOf, registerJunk } from 'mikser-io'
 import { MikserAuthenticator } from './lib/authenticator.js'
 import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
 
 export { MikserAuthenticator, withStagedWrites, stageWrites }
+
+// Nephele's own sidecar files, declared to the engine so neither the scan nor
+// the watcher imports them (mikser-io 9.7.0+).
+//
+// Measured, because the shape is not what it looks like. A collection's meta
+// file is `<dir>/.nephelemeta` — dot-prefixed, so it was already invisible
+// for the same accidental reason .DS_Store was. A file's is
+// `<dir>/page.md.nephelemeta`, which is NOT dot-prefixed and was both scanned
+// and watched: setting one dead property on one document produced a second
+// entity for the sidecar.
+//
+// Registered unconditionally rather than only when `meta-files` is selected,
+// so an operator who switches later is covered by the switch itself.
+registerJunk({ ignore: ['**/*.nephelemeta'], match: /\.nephelemeta$/ })
 
 // Capability names are derived from the endpoint name, not configured:
 //
@@ -50,13 +64,23 @@ export function webdav(options = {}) {
         endpoints = {},
         auth,
         realm     = 'mikser',
-        // Nephele defaults both of these to 'meta-files', which writes
-        // .nephelemeta sidecars INTO the folder being served. Those folders
-        // are mikser sources, so every property a client sets would become a
-        // phantom entity — and a rebuild that writes could trip the watcher
-        // again. 'emulate' reports success without writing, which is what
-        // keeps badly-behaved clients (Finder wants locks) working. Use
-        // 'meta-files' only with an ignore rule for **/.nephelemeta.
+        // Nephele defaults both to 'meta-files', which writes sidecars INTO
+        // the folder being served. The sidecars are filtered out of the
+        // catalog now (see registerJunk above), so the remaining reason to
+        // default to 'emulate' is a plain one: a content folder that people
+        // browse and commit should not fill up with page.md.nephelemeta
+        // files.
+        //
+        // The cost is measurable and small: 'emulate' returns a valid
+        // Lock-Token header but an EMPTY <lockdiscovery/> body, where
+        // 'meta-files' returns the full <activelock>. Clients read the
+        // header; one that parses the body for the token would not find it.
+        // Choose 'meta-files' if you need real dead properties or real
+        // locks, and accept the sidecars.
+        //
+        // Do NOT choose 'disallow' if macOS clients matter: it drops DAV
+        // compliance class 2 from the OPTIONS response, and Finder refuses a
+        // read-write mount without it.
         properties = 'emulate',
         locks      = 'emulate',
     } = options

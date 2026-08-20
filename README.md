@@ -32,11 +32,15 @@ where the sharp edges are (see **Working-folder hazards**).
   group holding the first and not the second gets a read-only mount with no
   flag involved.
 
-- **Sidecar meta-files are off by default.** Nephele defaults `properties`
-  and `locks` to `'meta-files'`, which writes `.nephelemeta` *into the folder
-  being served* — a mikser source, so every property a client set would
-  become a phantom entity. `'emulate'` reports success without writing, which
-  is also what keeps badly-behaved clients working (Finder wants locks).
+- **Sidecar meta-files are off by default**, and safe if you turn them on.
+  Nephele defaults `properties` and `locks` to `'meta-files'`, which writes
+  sidecars *into the folder being served*. The shape is not what it looks
+  like: a collection's is `.nephelemeta` (dot-prefixed, already invisible to
+  mikser), but a file's is `page.md.nephelemeta` — **not** dot-prefixed, and
+  measurably imported as its own entity. The plugin declares
+  `*.nephelemeta` to the engine via `registerJunk`, so either mode is safe.
+  `'emulate'` stays the default for a plainer reason: a content folder people
+  browse and commit should not fill up with sidecars.
 
 - **Writes are staged and renamed.** The adapter opens the destination with
   `'w'` and streams into it, which was measured to expose a growing partial
@@ -114,6 +118,31 @@ bugs, but they will bite if nobody said them out loud.
 - **Upload size is bounded by the request timeout.** Node caps a request at 5
   minutes, which for uploads is a size limit expressed in seconds. Raise it
   with `server.requestTimeout` in `mikser.config.js` (mikser-io 9.5.0+).
+
+## Client compliance, measured
+
+Tested against [`webdav`](https://github.com/perry-mitchell/webdav-client), a
+third-party client that builds its own PROPFIND bodies and parses its own
+multistatus responses — so it disagrees where the implementation is wrong
+rather than where the tests are.
+
+Three protocol facts worth knowing, all asserted in `test/protocol.test.js`:
+
+| | |
+| --- | --- |
+| default (`emulate`) | `DAV: 1, 3, 2` — **class 2**, which macOS requires for a read-write mount |
+| `locks: 'disallow'` | drops class 2 and `LOCK` from `Allow`. **Finder will refuse a read-write mount.** A trap, because it is invisible until someone tries |
+| `emulate` vs `meta-files` | both return a valid `Lock-Token` header; `emulate` returns an empty `<lockdiscovery/>` where `meta-files` returns the full `<activelock>` |
+
+The last is the real cost of the default: clients read the header, so this is
+survivable, but a client that parses the body for the token finds nothing.
+Choose `meta-files` if you need real dead properties or real locking — with
+persisted locks a second `LOCK` on a held resource correctly answers `423`.
+
+One more, because it surprises people: **`LOCK` on a path that does not exist
+creates an empty file** (RFC 4918 §9.10.4). A client that locks before writing
+— Finder's Save As does — leaves an empty document behind even if the write
+never arrives.
 
 ## Why writes are staged
 
