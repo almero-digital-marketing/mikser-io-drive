@@ -211,6 +211,39 @@ usually a different mount.
 
 Both rows above are asserted in `test/atomic-writes.test.js`.
 
+## Why Nephele, and not the alternative
+
+The Node WebDAV server field is two live projects. Both were scored with the
+same litmus suites, each on a fresh server:
+
+| suite | Nephele `1.0.0-alpha.67` | webdav-server `2.6.3` |
+| --- | --- | --- |
+| basic | **16/16** | 15/16 |
+| copymove | 11/13 | **12/13** |
+| props | **27/30** | 7/30 |
+| locks | **37/41** | 11/24 *(aborted)* |
+| http | 4/4 | 4/4 |
+
+`webdav-server` has more stars (282 vs 108), is Express-mountable, and has a
+path-based privilege manager that would map neatly onto per-folder access. It
+also woke up on 2026-08-04 after six and a half years of silence — dropping
+v1, adding unit tests — so it is reviving rather than dead. And it gets the
+`Overwrite: F` case right, which is Nephele's most client-visible gap.
+
+But 7/30 on properties and a `locks` run that aborts partway is a different
+class of problem from Nephele's four known gaps, and it carries 65 open issues
+against Nephele's zero. Nephele is also Apache-2.0 and load-bearing for its
+author's own product, which is the maintenance signal that matters most.
+
+Staying on Nephele. If its gaps ever become the binding constraint, the
+serious alternative is not another npm package — it is **Apache `mod_dav`**,
+the implementation litmus was written to test, which reads `htpasswd` and
+`htgroup` natively with `AuthUserFile` / `AuthGroupFile` / `Require group`.
+That would cost the Express integration, the capability model, per-request
+read-only, atomic staged writes and the route inventory — a separate process
+serving the same folder, with its own idea of who may do what. Worth it only
+if strict compliance outranks all of that.
+
 ## Nephele is pre-1.0
 
 `nephele@1.0.0-alpha.67`. It implements RFC 4918 fully, but the version is
