@@ -104,9 +104,13 @@ bugs, but they will bite if nobody said them out loud.
 - **Expose sources, never the output folder.** DAV locks are advisory and
   mikser does not honour them, so a locked file the renderer rewrites makes
   the lock a lie.
-- **File managers leave litter.** macOS creates `.DS_Store` and `._*`
-  resource forks in any folder it browses; each becomes an entity unless
-  ignored.
+- **File-manager litter is filtered by the engine**, from mikser-io 9.6.0.
+  This was measured, and the earlier claim here was wrong in an instructive
+  way: the macOS files (`.DS_Store`, `._*`) were already invisible, because
+  globby defaults to `dot: false` and the watcher ignores leading dots. The
+  **Windows** ones are not dotfiles — `Thumbs.db` and `desktop.ini` were both
+  scanned *and* watched, and became entities. Core now filters a conservative
+  OS/file-manager list on both paths; `junk: false` in config turns it off.
 - **Upload size is bounded by the request timeout.** Node caps a request at 5
   minutes, which for uploads is a size limit expressed in seconds. Raise it
   with `server.requestTimeout` in `mikser.config.js` (mikser-io 9.5.0+).
