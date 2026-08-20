@@ -2,8 +2,9 @@ import path from 'node:path'
 
 import { registerRoute, resolveAuth, reachabilityOf, isLoopback } from 'mikser-io'
 import { MikserAuthenticator } from './lib/authenticator.js'
+import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
 
-export { MikserAuthenticator }
+export { MikserAuthenticator, withStagedWrites, stageWrites }
 
 // Capability names are derived from the endpoint name, not configured:
 //
@@ -121,12 +122,26 @@ export function webdav(options = {}) {
                     logger,
                 })
 
+                const fsAdapter = new FileSystemAdapter({
+                    root,
+                    properties: ep.properties ?? properties,
+                    locks:      ep.locks      ?? locks,
+                })
+
                 app.use(mountPath, nepheleServer({
-                    adapter: new FileSystemAdapter({
-                        root,
-                        properties: ep.properties ?? properties,
-                        locks:      ep.locks      ?? locks,
-                    }),
+                    // Writes are staged to a sibling temp file and renamed.
+                    // The adapter writes straight to the destination with
+                    // open(path,'w'), which truncates immediately — so the
+                    // watcher can import a half-written file, and an
+                    // interrupted overwrite leaves the ORIGINAL destroyed.
+                    // Both measured; see lib/staged-writes.js.
+                    adapter: (ep.atomicWrites === false)
+                        ? fsAdapter
+                        : withStagedWrites(fsAdapter, {
+                            onFailure: (err, file) => logger.warn(
+                                'webdav: upload of %s failed, original left intact — %s',
+                                path.basename(file), err.message),
+                        }),
                     authenticator,
                     // `readOnly: true` is a hard cap — "nobody writes here",
                     // which is a different statement from "you may not write

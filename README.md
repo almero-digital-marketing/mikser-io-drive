@@ -38,6 +38,12 @@ where the sharp edges are (see **Working-folder hazards**).
   become a phantom entity. `'emulate'` reports success without writing, which
   is also what keeps badly-behaved clients working (Finder wants locks).
 
+- **Writes are staged and renamed.** The adapter opens the destination with
+  `'w'` and streams into it, which was measured to expose a growing partial
+  file *and* destroy the previous contents on an interrupted upload. Writes go
+  to a sibling `.part` file and `rename(2)` on success. `atomicWrites: false`
+  restores the adapter's behaviour.
+
 - **Basic auth only, so HTTPS.** WebDAV clients speak Basic or Digest, and
   Digest needs the plaintext password — impossible against bcrypt hashes. The
   plugin warns when the configured URL is plain `http` and not loopback.
@@ -98,14 +104,40 @@ bugs, but they will bite if nobody said them out loud.
 - **Expose sources, never the output folder.** DAV locks are advisory and
   mikser does not honour them, so a locked file the renderer rewrites makes
   the lock a lie.
-- **Partial uploads are visible.** Nephele writes to the target path, so the
-  watcher can see a half-written large file. Test a big `PUT` against your own
-  watch settings before trusting it.
 - **File managers leave litter.** macOS creates `.DS_Store` and `._*`
   resource forks in any folder it browses; each becomes an entity unless
   ignored.
-- **Upload size is bounded by the request timeout.** Node defaults to 5
-  minutes. The engine owns `listen()`, so this plugin cannot raise it.
+- **Upload size is bounded by the request timeout.** Node caps a request at 5
+  minutes, which for uploads is a size limit expressed in seconds. Raise it
+  with `server.requestTimeout` in `mikser.config.js` (mikser-io 9.5.0+).
+
+## Why writes are staged
+
+Measured, not assumed. `@nephele/adapter-file-system` writes like this:
+
+```js
+const handle = await fsp.open(this.absolutePath, 'w')   // truncates NOW
+input.pipe(handle.createWriteStream())
+```
+
+Against a 512KB upload delivered in eight slow chunks:
+
+| | adapter as-is | staged |
+| --- | --- | --- |
+| sizes seen at the destination mid-upload | `65536, 131072, … 524288` | never exists |
+| a 1600-byte file whose overwrite is interrupted | **196608 bytes of the new content** | 1600 bytes, unchanged |
+
+The first matters because these folders are mikser sources — the watcher can
+import a half-written file and render a truncated page. The second is data
+loss: not the old file, not an error, a corrupted file and no indication.
+
+Staging to a sibling `.part` file and renaming fixes both, because `rename(2)`
+within a directory is atomic — the file appears complete or not at all, and a
+failed upload never opens the original. A sibling rather than the OS temp
+directory, because rename is only atomic within one filesystem and `/tmp` is
+usually a different mount.
+
+Both rows above are asserted in `test/atomic-writes.test.js`.
 
 ## Nephele is pre-1.0
 
