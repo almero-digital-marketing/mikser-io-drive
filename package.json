@@ -1,0 +1,41 @@
+{
+  "name": "mikser-io-webdav",
+  "version": "0.1.0",
+  "description": "WebDAV for mikser-io. Exposes working-folder directories as WebDAV endpoints via Nephele, authenticated through mikser-io-auth's htpasswd identity — so content can be edited from Finder, Explorer or any DAV client and the build picks the change up.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node --no-warnings --test --test-reporter=spec 'test/**/*.test.js'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/almero-digital-marketing/mikser-io-webdav.git"
+  },
+  "keywords": [
+    "mikser",
+    "mikser-io",
+    "webdav",
+    "dav",
+    "nephele"
+  ],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/almero-digital-marketing/mikser-io-webdav/issues"
+  },
+  "homepage": "https://github.com/almero-digital-marketing/mikser-io-webdav#readme",
+  "peerDependencies": {
+    "mikser-io": "^9.4.0"
+  },
+  "dependencies": {
+    "@nephele/adapter-file-system": "1.0.0-alpha.67",
+    "@nephele/plugin-read-only": "1.0.0-alpha.67",
+    "nephele": "1.0.0-alpha.67"
+  },
+  "devDependencies": {
+    "bcryptjs": "^3.0.0",
+    "express": "^5.2.1",
+    "mikser-io": "file:../mikser-io",
+    "mikser-io-auth": "file:../mikser-io-auth"
+  }
+}
