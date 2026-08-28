@@ -2,6 +2,7 @@ import path from 'node:path'
 
 import { registerRoute, resolveAuth, reachabilityOf, registerJunk } from 'mikser-io'
 import { MikserAuthenticator } from './lib/authenticator.js'
+import { registerWebdavMcp } from './lib/mcp.js'
 import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
 
 export { MikserAuthenticator, withStagedWrites, stageWrites }
@@ -190,6 +191,17 @@ export function webdav(options = {}) {
             }
 
             logger.info('WebDAV mounted at %s (%s)', base, names.join(', '))
+
+            // An agent can already mount this with its bearer token; what it
+            // could not do was discover the endpoints and which of them its own
+            // capabilities let it write. Registered against the substrate
+            // rather than imported by mcp — domain tools live with the domain
+            // plugin, and this one knows things only this plugin knows.
+            registerWebdavMcp({
+                runtime, base, endpoints, logger,
+                capabilityOf: readCapability,
+                writeCapabilityOf: writeCapability,
+            })
 
             // Node's default request timeout is 5 minutes, which bounds how
             // large a file can be uploaded. The engine owns listen(), so this
