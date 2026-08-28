@@ -7,7 +7,7 @@ import bcrypt from 'bcryptjs'
 
 import { runtime } from 'mikser-io'
 import { auth } from 'mikser-io-auth'
-import { webdav } from '../index.js'
+import { drive } from '../index.js'
 
 // These two properties are the reason lib/staged-writes.js exists. The
 // underlying adapter writes with open(path, 'w') straight to the destination,
@@ -20,7 +20,7 @@ const CHUNK = 65536
 const CHUNKS = 8
 
 before(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'mikser-webdav-atomic-'))
+    dir = await mkdtemp(path.join(tmpdir(), 'mikser-drive-atomic-'))
     content = path.join(dir, 'documents')
     await mkdir(content, { recursive: true })
     await mkdir(path.join(dir, 'runtime'), { recursive: true })
@@ -33,7 +33,7 @@ before(async () => {
     runtime.engine = { ...runtime.engine, logger: { info(){}, warn(){}, error(){}, debug(){}, trace(){}, fatal(){} } }
 
     const identity = auth({})
-    const plugin = webdav({ endpoints: { content: { folder: 'documents' } }, auth: identity })
+    const plugin = drive({ endpoints: { content: { folder: 'documents' } }, auth: identity })
     const load = [], loaded = []
     const core = {
         runtime,
@@ -72,7 +72,7 @@ function slowBody({ chunks = CHUNKS, size = CHUNK, gapMs = 120, abortAt = null }
     })
 }
 
-const put = (name, body) => fetch(`http://127.0.0.1:${port}/webdav/content/${name}`, {
+const put = (name, body) => fetch(`http://127.0.0.1:${port}/drive/content/${name}`, {
     method: 'PUT', headers: { authorization: AUTH }, body, duplex: 'half',
 })
 const sizeOf = async (p) => { try { return (await stat(p)).size } catch { return null } }

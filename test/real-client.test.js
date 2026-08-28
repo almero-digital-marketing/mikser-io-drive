@@ -8,7 +8,7 @@ import { createClient } from 'webdav'
 
 import { runtime } from 'mikser-io'
 import { auth } from 'mikser-io-auth'
-import { webdav } from '../index.js'
+import { drive } from '../index.js'
 
 // Everything else in this suite drives the server with fetch and hand-written
 // XML, which tests the protocol as I understand it. This file drives it with
@@ -20,7 +20,7 @@ let server, port, dir, content
 let editor, reviewer, stranger
 
 before(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'mikser-webdav-client-'))
+    dir = await mkdtemp(path.join(tmpdir(), 'mikser-drive-client-'))
     content = path.join(dir, 'documents')
     await mkdir(path.join(content, 'guides'), { recursive: true })
     await mkdir(path.join(dir, 'runtime'), { recursive: true })
@@ -39,11 +39,11 @@ before(async () => {
 
     const identity = auth({
         capabilities: {
-            editors:   ['webdav:content', 'webdav:content:write'],
-            reviewers: ['webdav:content'],
+            editors:   ['drive:content', 'drive:content:write'],
+            reviewers: ['drive:content'],
         },
     })
-    const plugin = webdav({ endpoints: { content: { folder: 'documents' } }, auth: identity })
+    const plugin = drive({ endpoints: { content: { folder: 'documents' } }, auth: identity })
 
     const load = [], loaded = []
     const core = {
@@ -60,7 +60,7 @@ before(async () => {
     server = await new Promise(r => { const s = app.listen(0, () => r(s)) })
     port = server.address().port
 
-    const url = `http://127.0.0.1:${port}/webdav/content`
+    const url = `http://127.0.0.1:${port}/drive/content`
     editor   = createClient(url, { username: 'alice', password: 'alice-pw' })
     reviewer = createClient(url, { username: 'bob',   password: 'bob-pw' })
     stranger = createClient(url, { username: 'carol', password: 'carol-pw' })
@@ -188,7 +188,7 @@ describe('a real client meets the capability model', () => {
     })
 
     it('a wrong password is refused', async () => {
-        const impostor = createClient(`http://127.0.0.1:${port}/webdav/content`,
+        const impostor = createClient(`http://127.0.0.1:${port}/drive/content`,
                                       { username: 'alice', password: 'wrong' })
         await assert.rejects(() => impostor.getDirectoryContents('/'), /401|Unauthorized/i)
     })

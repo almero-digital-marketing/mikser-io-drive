@@ -1,6 +1,6 @@
 {
-  "name": "mikser-io-webdav",
-  "version": "0.8.1",
+  "name": "mikser-io-drive",
+  "version": "0.9.0",
   "description": "WebDAV for mikser-io. Exposes working-folder directories as WebDAV endpoints via Nephele, authenticated through mikser-io-auth's htpasswd identity — so content can be edited from Finder, Explorer or any DAV client and the build picks the change up.",
   "main": "index.js",
   "type": "module",
@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/almero-digital-marketing/mikser-io-webdav.git"
+    "url": "git+https://github.com/almero-digital-marketing/mikser-io-drive.git"
   },
   "keywords": [
     "mikser",
@@ -21,9 +21,9 @@
   "author": "",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/almero-digital-marketing/mikser-io-webdav/issues"
+    "url": "https://github.com/almero-digital-marketing/mikser-io-drive/issues"
   },
-  "homepage": "https://github.com/almero-digital-marketing/mikser-io-webdav#readme",
+  "homepage": "https://github.com/almero-digital-marketing/mikser-io-drive#readme",
   "peerDependencies": {
     "mikser-io": "^9.7.0",
     "zod": "^4.0.0"

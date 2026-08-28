@@ -77,7 +77,7 @@ before(async (t) => {
             await symlink(path.join(donor, entry), path.join(dir, 'node_modules', entry)).catch(() => {})
         }
     }
-    for (const pkg of ['mikser-io', 'mikser-io-mcp', 'mikser-io-webdav']) {
+    for (const pkg of ['mikser-io', 'mikser-io-mcp', 'mikser-io-drive']) {
         await rm(path.join(dir, 'node_modules', pkg), { recursive: true, force: true })
         await symlink(path.resolve(here, '..', pkg), path.join(dir, 'node_modules', pkg)).catch(() => {})
     }
@@ -96,7 +96,7 @@ before(async (t) => {
     await writeFile(path.join(dir, 'mikser.config.js'),
         "import { files, assets, renderPreset } from 'mikser-io'\n"
         + "import { mcp } from 'mikser-io-mcp'\n"
-        + "import { webdav } from 'mikser-io-webdav'\n"
+        + "import { drive } from 'mikser-io-drive'\n"
         + 'export default async () => ({\n'
         + '    plugins: [\n'
         + "        mcp({ base: '' }),\n"
@@ -104,7 +104,7 @@ before(async (t) => {
         + "        assets({ assetsFolder: 'derived', presetsFolder: 'presets',\n"
         + "                 presets: { web: { match: ['/files/**/*.png'] } } }),\n"
         + '        renderPreset(),\n'
-        + "        webdav({ allowRemote: true, endpoints: { media: { folder: 'media' } } }),\n"
+        + "        drive({ allowRemote: true, endpoints: { media: { folder: 'media' } } }),\n"
         + '    ],\n'
         + '})\n')
 
@@ -142,7 +142,7 @@ describe('derived — the preset passthrough', { skip: hasSharp ? false : 'sharp
         })
 
         const result = await rpc(null, 'tools/call', {
-            name: 'mikser_webdav_add',
+            name: 'mikser_drive_add',
             arguments: { endpoint: 'media', folder: 'shots',
                          files: [{ name: 'hero.png', base64: PNG.toString('base64'), mime: 'image/png' }] },
         }, session)

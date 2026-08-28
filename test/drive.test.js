@@ -7,7 +7,7 @@ import bcrypt from 'bcryptjs'
 
 import { runtime } from 'mikser-io'
 import { auth } from 'mikser-io-auth'
-import { webdav } from '../index.js'
+import { drive } from '../index.js'
 
 // A real Nephele server over a real directory, authenticated through a real
 // htpasswd file. WebDAV is almost entirely I/O and protocol; a mocked
@@ -18,7 +18,7 @@ const b64 = (s) => Buffer.from(s, 'utf8').toString('base64')
 const as  = (user) => ({ authorization: `Basic ${b64(`${user}:${user}-pw`)}` })
 
 before(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'mikser-webdav-'))
+    dir = await mkdtemp(path.join(tmpdir(), 'mikser-drive-'))
     content = path.join(dir, 'documents')
     await mkdir(content, { recursive: true })
     await mkdir(path.join(dir, 'runtime'), { recursive: true })
@@ -40,13 +40,13 @@ before(async () => {
         capabilities: {
             // Capability names are derived from the endpoint name, so an
             // endpoint you were never granted is invisible to you — which is
-            // why `editors` has to name `webdav:locked` too.
-            editors:   ['webdav:content', 'webdav:content:write', 'webdav:locked'],
-            reviewers: ['webdav:content'],                          // read, no write
+            // why `editors` has to name `drive:locked` too.
+            editors:   ['drive:content', 'drive:content:write', 'drive:locked'],
+            reviewers: ['drive:content'],                          // read, no write
         },
     })
 
-    const plugin = webdav({
+    const plugin = drive({
         endpoints: {
             content: { folder: 'documents' },
             locked:  { folder: 'documents', readOnly: true },
@@ -82,21 +82,21 @@ const dav = (method, p, { headers = {}, body } = {}) =>
 
 describe('auth', () => {
     it('challenges an anonymous request with Basic, so a DAV client prompts', async () => {
-        const res = await dav('PROPFIND', '/webdav/content/', { headers: { depth: '0' } })
+        const res = await dav('PROPFIND', '/drive/content/', { headers: { depth: '0' } })
         assert.equal(res.status, 401)
         assert.match(res.headers.get('www-authenticate'), /^Basic realm="mikser"/)
         assert.match(res.headers.get('www-authenticate'), /charset="UTF-8"/)
     })
 
     it('refuses a wrong password', async () => {
-        const res = await dav('PROPFIND', '/webdav/content/', {
+        const res = await dav('PROPFIND', '/drive/content/', {
             headers: { depth: '0', authorization: `Basic ${b64('alice:wrong')}` },
         })
         assert.equal(res.status, 401)
     })
 
     it('lets a granted user list the collection', async () => {
-        const res = await dav('PROPFIND', '/webdav/content/', { headers: { depth: '1', ...as('alice') } })
+        const res = await dav('PROPFIND', '/drive/content/', { headers: { depth: '1', ...as('alice') } })
         assert.equal(res.status, 207)
         const xml = await res.text()
         assert.match(xml, /page\.md/)
@@ -105,20 +105,20 @@ describe('auth', () => {
     it('403s an authenticated user who lacks the endpoint capability', async () => {
         // carol is in no group, so with a capability map configured she holds
         // nothing — authenticated, but not for this endpoint.
-        const res = await dav('PROPFIND', '/webdav/content/', { headers: { depth: '0', ...as('carol') } })
+        const res = await dav('PROPFIND', '/drive/content/', { headers: { depth: '0', ...as('carol') } })
         assert.equal(res.status, 403)
     })
 })
 
 describe('read and write', () => {
     it('GETs a file', async () => {
-        const res = await dav('GET', '/webdav/content/page.md', { headers: as('alice') })
+        const res = await dav('GET', '/drive/content/page.md', { headers: as('alice') })
         assert.equal(res.status, 200)
         assert.equal(await res.text(), '# hello\n')
     })
 
     it('PUTs a file, and it lands in the working folder where the build will see it', async () => {
-        const res = await dav('PUT', '/webdav/content/new.md', {
+        const res = await dav('PUT', '/drive/content/new.md', {
             headers: { ...as('alice'), 'content-type': 'text/markdown' },
             body: '# written over dav\n',
         })
@@ -127,8 +127,8 @@ describe('read and write', () => {
     })
 
     it('DELETEs a file', async () => {
-        await dav('PUT', '/webdav/content/gone.md', { headers: as('alice'), body: 'x' })
-        const res = await dav('DELETE', '/webdav/content/gone.md', { headers: as('alice') })
+        await dav('PUT', '/drive/content/gone.md', { headers: as('alice'), body: 'x' })
+        const res = await dav('DELETE', '/drive/content/gone.md', { headers: as('alice') })
         assert.ok([200, 204].includes(res.status), `unexpected ${res.status}`)
         await assert.rejects(() => readFile(path.join(content, 'gone.md')))
     })
@@ -136,41 +136,41 @@ describe('read and write', () => {
 
 describe('write capability is per request, not per mount', () => {
     it('a user with read but not write gets a read-only view of the SAME endpoint', async () => {
-        // bob is a reviewer: holds webdav:content, not webdav:content:write.
-        const list = await dav('PROPFIND', '/webdav/content/', { headers: { depth: '0', ...as('bob') } })
+        // bob is a reviewer: holds drive:content, not drive:content:write.
+        const list = await dav('PROPFIND', '/drive/content/', { headers: { depth: '0', ...as('bob') } })
         assert.equal(list.status, 207, 'bob can read')
 
-        const write = await dav('PUT', '/webdav/content/bob.md', { headers: as('bob'), body: 'nope' })
+        const write = await dav('PUT', '/drive/content/bob.md', { headers: as('bob'), body: 'nope' })
         assert.ok(write.status >= 400, `bob should not write, got ${write.status}`)
         await assert.rejects(() => readFile(path.join(content, 'bob.md')),
                              'nothing should have been written')
     })
 
     it('and the same URL is writable for someone who holds the capability', async () => {
-        const write = await dav('PUT', '/webdav/content/alice.md', { headers: as('alice'), body: 'yes' })
+        const write = await dav('PUT', '/drive/content/alice.md', { headers: as('alice'), body: 'yes' })
         assert.ok([201, 204].includes(write.status))
     })
 })
 
 describe('an endpoint you were not granted is refused outright', () => {
     it('403s a user who holds no capability for it', async () => {
-        // bob is a reviewer: webdav:content only, nothing for `locked`.
-        const res = await dav('PROPFIND', '/webdav/locked/', { headers: { depth: '0', ...as('bob') } })
+        // bob is a reviewer: drive:content only, nothing for `locked`.
+        const res = await dav('PROPFIND', '/drive/locked/', { headers: { depth: '0', ...as('bob') } })
         assert.equal(res.status, 403)
     })
 })
 
 describe('readOnly is a hard cap', () => {
     it('refuses a write even from a user who holds every capability', async () => {
-        // alice holds webdav:content:write, but this endpoint is readOnly —
+        // alice holds drive:content:write, but this endpoint is readOnly —
         // "nobody writes here" is a different statement from "you may not".
-        const res = await dav('PUT', '/webdav/locked/hard.md', { headers: as('alice'), body: 'x' })
+        const res = await dav('PUT', '/drive/locked/hard.md', { headers: as('alice'), body: 'x' })
         assert.ok(res.status >= 400, `expected a refusal, got ${res.status}`)
         await assert.rejects(() => readFile(path.join(content, 'hard.md')))
     })
 
     it('still allows reading', async () => {
-        const res = await dav('GET', '/webdav/locked/page.md', { headers: as('alice') })
+        const res = await dav('GET', '/drive/locked/page.md', { headers: as('alice') })
         assert.equal(res.status, 200)
     })
 })
@@ -180,7 +180,7 @@ describe('no .nephelemeta sidecars in a watched source folder', () => {
         // The default 'meta-files' strategy would drop .nephelemeta into the
         // documents folder, where mikser's sources would pick it up as an
         // entity — and a rebuild that writes could trip the watcher again.
-        const res = await dav('PROPPATCH', '/webdav/content/page.md', {
+        const res = await dav('PROPPATCH', '/drive/content/page.md', {
             headers: { ...as('alice'), 'content-type': 'text/xml' },
             body: `<?xml version="1.0" encoding="utf-8"?>
 <D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><customprop xmlns="X:">v</customprop></D:prop></D:set></D:propertyupdate>`,
@@ -198,17 +198,17 @@ describe('the write gate covers every mutating method', () => {
     // PROPPATCH wide open — each of which changes the working folder, which
     // is what the build reads.
     const cases = [
-        ['PUT',       '/webdav/content/x.md',  { body: 'x' }],
-        ['DELETE',    '/webdav/content/page.md', {}],
-        ['MKCOL',     '/webdav/content/newdir/', {}],
-        ['MOVE',      '/webdav/content/page.md', { headers: { destination: '/webdav/content/moved.md' } }],
-        ['COPY',      '/webdav/content/page.md', { headers: { destination: '/webdav/content/copied.md' } }],
-        ['PROPPATCH', '/webdav/content/page.md', {
+        ['PUT',       '/drive/content/x.md',  { body: 'x' }],
+        ['DELETE',    '/drive/content/page.md', {}],
+        ['MKCOL',     '/drive/content/newdir/', {}],
+        ['MOVE',      '/drive/content/page.md', { headers: { destination: '/drive/content/moved.md' } }],
+        ['COPY',      '/drive/content/page.md', { headers: { destination: '/drive/content/copied.md' } }],
+        ['PROPPATCH', '/drive/content/page.md', {
             headers: { 'content-type': 'text/xml' },
             body: `<?xml version="1.0" encoding="utf-8"?>
 <D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><p xmlns="X:">v</p></D:prop></D:set></D:propertyupdate>`,
         }],
-        ['LOCK',      '/webdav/content/page.md', {
+        ['LOCK',      '/drive/content/page.md', {
             headers: { 'content-type': 'text/xml' },
             body: `<?xml version="1.0" encoding="utf-8"?>
 <D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>`,
@@ -226,8 +226,8 @@ describe('the write gate covers every mutating method', () => {
     }
 
     it('and still lets a reader read', async () => {
-        assert.equal((await dav('GET', '/webdav/content/page.md', { headers: as('bob') })).status, 200)
-        assert.equal((await dav('PROPFIND', '/webdav/content/', { headers: { depth: '1', ...as('bob') } })).status, 207)
-        assert.equal((await dav('OPTIONS', '/webdav/content/', { headers: as('bob') })).status < 300, true)
+        assert.equal((await dav('GET', '/drive/content/page.md', { headers: as('bob') })).status, 200)
+        assert.equal((await dav('PROPFIND', '/drive/content/', { headers: { depth: '1', ...as('bob') } })).status, 207)
+        assert.equal((await dav('OPTIONS', '/drive/content/', { headers: as('bob') })).status < 300, true)
     })
 })

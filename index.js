@@ -23,22 +23,22 @@ registerJunk({ ignore: ['**/*.nephelemeta'], match: /\.nephelemeta$/ })
 
 // Capability names are derived from the endpoint name, not configured:
 //
-//   webdav:<name>          may mount and read it
-//   webdav:<name>:write    may also write to it
+//   drive:<name>          may mount and read it
+//   drive:<name>:write    may also write to it
 //
 // so an endpoint declares nothing and the grant reads for itself:
 //
-//   capabilities: { editors: ['webdav:content', 'webdav:content:write'] }
+//   capabilities: { editors: ['drive:content', 'drive:content:write'] }
 //
 // A group that holds the read capability and not the write one gets a
 // read-only mount, which is the common case and needs no flag.
-export const readCapability  = (name) => `webdav:${name}`
-export const writeCapability = (name) => `webdav:${name}:write`
+export const readCapability  = (name) => `drive:${name}`
+export const writeCapability = (name) => `drive:${name}:write`
 
 /**
  * WebDAV endpoints over working-folder directories (ADR-0012 for auth).
  *
- *     webdav({
+ *     drive({
  *         endpoints: {
  *             content: { folder: 'documents' },
  *             media:   { folder: 'files/media' },
@@ -59,9 +59,9 @@ export const writeCapability = (name) => `webdav:${name}:write`
  * handler (server.js), so an endpoint at `/content` would silently shadow a
  * real page at /content/ in the built site.
  */
-export function webdav(options = {}) {
+export function drive(options = {}) {
     const {
-        base      = '/webdav',
+        base      = '/drive',
         endpoints = {},
         auth,
         realm     = 'mikser',
@@ -95,7 +95,7 @@ export function webdav(options = {}) {
             const app = runtime.options.app
             if (!app) {
                 throw new Error(
-                    'webdav plugin requires runtime.options.app — run mikser with --server, ' +
+                    'drive plugin requires runtime.options.app — run mikser with --server, ' +
                     'or pass { app: yourExpressInstance } to setup() before loading the plugin'
                 )
             }
@@ -115,14 +115,14 @@ export function webdav(options = {}) {
             if (auth && runtime.options.url?.startsWith('http://') &&
                 !/^http:\/\/(localhost|127\.|\[::1\])/.test(runtime.options.url)) {
                 logger.warn(
-                    'webdav: %s is plain http and WebDAV clients authenticate with Basic — ' +
+                    'drive: %s is plain http and WebDAV clients authenticate with Basic — ' +
                     'credentials travel base64-encoded, not encrypted. Serve over https, or ' +
                     'terminate TLS in front of mikser.', runtime.options.url)
             }
 
             for (const [name, ep] of Object.entries(endpoints)) {
                 if (!ep.folder) {
-                    throw new Error(`webdav: endpoint ${JSON.stringify(name)} declares no folder`)
+                    throw new Error(`drive: endpoint ${JSON.stringify(name)} declares no folder`)
                 }
                 const root = resolve(ep.folder)
                 const mountPath = `${base}/${name}`
@@ -164,7 +164,7 @@ export function webdav(options = {}) {
                         ? fsAdapter
                         : withStagedWrites(fsAdapter, {
                             onFailure: (err, file) => logger.warn(
-                                'webdav: upload of %s failed, original left intact — %s',
+                                'drive: upload of %s failed, original left intact — %s',
                                 path.basename(file), err.message),
                         }),
                     authenticator,
@@ -178,7 +178,7 @@ export function webdav(options = {}) {
 
                 registerRoute({
                     path:         mountPath,
-                    plugin:       'webdav',
+                    plugin:       'drive',
                     reachability: reachabilityOf({ auth: verifier, allowRemote: ep.allowRemote }),
                     // WebDAV GET/PUT stream file bodies, so a facade must not
                     // buffer this route.
@@ -207,7 +207,7 @@ export function webdav(options = {}) {
             // size limit expressed in seconds, and a large file over a slow
             // link is indistinguishable from a stalled request.
             const configured = runtime.config?.server?.requestTimeout
-            logger.debug('webdav: uploads bounded by the server request timeout — %s',
+            logger.debug('drive: uploads bounded by the server request timeout — %s',
                 configured == null
                     ? 'raised automatically for these streaming routes; override with config.server.requestTimeout'
                     : configured === 0 ? 'disabled by config.server.requestTimeout'
@@ -216,4 +216,4 @@ export function webdav(options = {}) {
     }
 }
 
-export default webdav
+export default drive

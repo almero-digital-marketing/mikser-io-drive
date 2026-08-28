@@ -7,7 +7,7 @@ import bcrypt from 'bcryptjs'
 
 import { runtime, junkIgnore, junkFilter } from 'mikser-io'
 import { auth } from 'mikser-io-auth'
-import { webdav } from '../index.js'
+import { drive } from '../index.js'
 
 // Protocol-surface facts that decide whether a real client will mount at all,
 // and what it leaves behind when it does. Found by testing against a real
@@ -16,7 +16,7 @@ let server, port, dir, content
 const AUTH = 'Basic ' + Buffer.from('alice:pw').toString('base64')
 
 before(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'mikser-webdav-proto-'))
+    dir = await mkdtemp(path.join(tmpdir(), 'mikser-drive-proto-'))
     content = path.join(dir, 'documents')
     await mkdir(content, { recursive: true })
     await mkdir(path.join(dir, 'runtime'), { recursive: true })
@@ -30,7 +30,7 @@ before(async () => {
     runtime.engine = { ...runtime.engine, logger: { info(){}, warn(){}, error(){}, debug(){}, trace(){}, fatal(){} } }
 
     const identity = auth({})
-    const plugin = webdav({
+    const plugin = drive({
         endpoints: {
             emulated: { folder: 'documents' },                                        // the default
             strict:   { folder: 'documents', properties: 'disallow', locks: 'disallow' },
@@ -59,10 +59,10 @@ after(async () => {
     await rm(dir, { recursive: true, force: true })
 })
 
-const options = (ep) => fetch(`http://127.0.0.1:${port}/webdav/${ep}/`, {
+const options = (ep) => fetch(`http://127.0.0.1:${port}/drive/${ep}/`, {
     method: 'OPTIONS', headers: { authorization: AUTH },
 })
-const lock = (ep, file = 'page.md') => fetch(`http://127.0.0.1:${port}/webdav/${ep}/${file}`, {
+const lock = (ep, file = 'page.md') => fetch(`http://127.0.0.1:${port}/drive/${ep}/${file}`, {
     method: 'LOCK',
     headers: { authorization: AUTH, 'content-type': 'text/xml', timeout: 'Second-3600' },
     body: `<?xml version="1.0" encoding="utf-8"?>
@@ -130,7 +130,7 @@ describe("nephele's own sidecars are declared to the engine", () => {
         // <dir>/.nephelemeta is dot-prefixed and was already invisible;
         // <dir>/page.md.nephelemeta is not, and setting one dead property
         // produced a second entity for the sidecar.
-        await fetch(`http://127.0.0.1:${port}/webdav/meta/page.md`, {
+        await fetch(`http://127.0.0.1:${port}/drive/meta/page.md`, {
             method: 'PROPPATCH',
             headers: { authorization: AUTH, 'content-type': 'text/xml' },
             body: `<?xml version="1.0" encoding="utf-8"?>
@@ -153,7 +153,7 @@ describe("nephele's own sidecars are declared to the engine", () => {
     })
 
     it('the default mode writes no sidecars at all', async () => {
-        await fetch(`http://127.0.0.1:${port}/webdav/emulated/page.md`, {
+        await fetch(`http://127.0.0.1:${port}/drive/emulated/page.md`, {
             method: 'PROPPATCH',
             headers: { authorization: AUTH, 'content-type': 'text/xml' },
             body: `<?xml version="1.0" encoding="utf-8"?>
@@ -161,11 +161,11 @@ describe("nephele's own sidecars are declared to the engine", () => {
         })
         // The 'meta' endpoint above shares this folder, so only assert that
         // emulate added nothing new for a file it alone touched.
-        const res = await fetch(`http://127.0.0.1:${port}/webdav/emulated/solo.md`, {
+        const res = await fetch(`http://127.0.0.1:${port}/drive/emulated/solo.md`, {
             method: 'PUT', headers: { authorization: AUTH }, body: 'x',
         })
         assert.ok([201, 204].includes(res.status))
-        await fetch(`http://127.0.0.1:${port}/webdav/emulated/solo.md`, {
+        await fetch(`http://127.0.0.1:${port}/drive/emulated/solo.md`, {
             method: 'PROPPATCH',
             headers: { authorization: AUTH, 'content-type': 'text/xml' },
             body: `<?xml version="1.0" encoding="utf-8"?>
@@ -180,7 +180,7 @@ describe('known nephele non-compliance, pinned', () => {
     // Found with litmus 0.13 (see README). These assertions describe what the
     // dependency does TODAY, wrongly, so that an upgrade which fixes it fails
     // here and gets noticed rather than silently changing behaviour.
-    const dav = (method, p, headers = {}) => fetch(`http://127.0.0.1:${port}/webdav/${p}`, {
+    const dav = (method, p, headers = {}) => fetch(`http://127.0.0.1:${port}/drive/${p}`, {
         method, headers: { authorization: AUTH, ...headers },
     })
     const origin = () => `http://127.0.0.1:${port}`
@@ -192,15 +192,15 @@ describe('known nephele non-compliance, pinned', () => {
         //
         // The safe half holds: the destination is NOT clobbered. The unsafe
         // half is the false success.
-        await fetch(`${origin()}/webdav/emulated/ow-src.md`, {
+        await fetch(`${origin()}/drive/emulated/ow-src.md`, {
             method: 'PUT', headers: { authorization: AUTH }, body: 'SOURCE',
         })
-        await fetch(`${origin()}/webdav/emulated/ow-dst.md`, {
+        await fetch(`${origin()}/drive/emulated/ow-dst.md`, {
             method: 'PUT', headers: { authorization: AUTH }, body: 'ORIGINAL',
         })
 
         const res = await dav('COPY', 'emulated/ow-src.md', {
-            destination: `${origin()}/webdav/emulated/ow-dst.md`,
+            destination: `${origin()}/drive/emulated/ow-dst.md`,
             overwrite: 'F',
         })
         assert.equal(res.status, 207, 'if this becomes 412, nephele fixed it — update the README')
@@ -211,14 +211,14 @@ describe('known nephele non-compliance, pinned', () => {
     })
 
     it('MOVE with Overwrite: F behaves the same way', async () => {
-        await fetch(`${origin()}/webdav/emulated/mv-src.md`, {
+        await fetch(`${origin()}/drive/emulated/mv-src.md`, {
             method: 'PUT', headers: { authorization: AUTH }, body: 'SOURCE',
         })
-        await fetch(`${origin()}/webdav/emulated/mv-dst.md`, {
+        await fetch(`${origin()}/drive/emulated/mv-dst.md`, {
             method: 'PUT', headers: { authorization: AUTH }, body: 'ORIGINAL',
         })
         const res = await dav('MOVE', 'emulated/mv-src.md', {
-            destination: `${origin()}/webdav/emulated/mv-dst.md`,
+            destination: `${origin()}/drive/emulated/mv-dst.md`,
             overwrite: 'F',
         })
         assert.equal(res.status, 207)
@@ -227,7 +227,7 @@ describe('known nephele non-compliance, pinned', () => {
     })
 
     it('a malformed PROPFIND body answers 500 where 400 is required', async () => {
-        const res = await fetch(`${origin()}/webdav/emulated/`, {
+        const res = await fetch(`${origin()}/drive/emulated/`, {
             method: 'PROPFIND',
             headers: { authorization: AUTH, 'content-type': 'text/xml', depth: '0' },
             body: '<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop>',   // unterminated

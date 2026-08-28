@@ -1,4 +1,4 @@
-# mikser-io-webdav
+# mikser-io-drive
 
 > WebDAV over the working folder, authenticated through
 > [`mikser-io-auth`](https://github.com/almero-digital-marketing/mikser-io-auth).
@@ -55,7 +55,7 @@ where the sharp edges are (see **Working-folder hazards**).
 ## Use
 
 ```js
-import { webdav } from 'mikser-io-webdav'
+import { webdav } from 'mikser-io-drive'
 import { auth }   from 'mikser-io-auth'
 
 const identity = auth({
@@ -263,10 +263,10 @@ Four tools carry bytes over the MCP connection itself, for a caller with no
 route to the host — a sandbox with no egress, a desktop client with no shell.
 
 ```
-mikser_webdav_add({ endpoint, files: [{ name, base64, mime }], folder?, overwrite?, dryRun? })
-mikser_webdav_read({ path })
-mikser_webdav_move({ from, to, rewriteRefs?, dryRun? })
-mikser_webdav_delete({ path, force?, dryRun? })
+mikser_drive_add({ endpoint, files: [{ name, base64, mime }], folder?, overwrite?, dryRun? })
+mikser_drive_read({ path })
+mikser_drive_move({ from, to, rewriteRefs?, dryRun? })
+mikser_drive_delete({ path, force?, dryRun? })
 ```
 
 Nothing here is media-specific. An endpoint is whatever the deployment
