@@ -203,12 +203,23 @@ export function webdav(options = {}) {
                 writeCapabilityOf: writeCapability,
             })
 
-            // Node's default request timeout is 5 minutes, which bounds how
-            // large a file can be uploaded. The engine owns listen(), so this
-            // plugin cannot reach the http.Server to raise it.
-            logger.debug(
-                'webdav: uploads are bounded by the server request timeout (node default 5m); ' +
-                'raise it on the http.Server if large files matter')
+            // Node caps a single request at 5 minutes, which bounds how large a
+            // file can be uploaded — 1GB needs better than 50 Mbps to fit.
+            //
+            // This plugin does not own listen(), but the engine exposes the
+            // knob: `config.server.requestTimeout` (ms, or 0 to disable). The
+            // note used to say the timeout could not be reached from here,
+            // which sent an operator hunting for something that does not
+            // exist instead of at a line of config.
+            const requestTimeout = runtime.config?.server?.requestTimeout
+            if (requestTimeout == null) {
+                logger.debug(
+                    'webdav: uploads are bounded by the server request timeout (node default 5m, so ~1GB at '
+                    + '50 Mbps). Raise or disable it with config.server.requestTimeout if large files matter.')
+            } else {
+                logger.debug('webdav: server request timeout is %s, so uploads are bounded by that',
+                    requestTimeout === 0 ? 'disabled' : `${requestTimeout}ms`)
+            }
         })
     }
 }

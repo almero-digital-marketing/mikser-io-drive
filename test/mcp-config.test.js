@@ -363,3 +363,41 @@ describe('mikser_dav_token', () => {
         }
     })
 })
+
+describe('the ttl bounds the START of a transfer, not its duration', () => {
+    // Counter-intuitive and measured: a 10-second PUT with a 3-second token
+    // returned 201 with every byte landed, because authorization happens once
+    // at the beginning of the request. A caller sizing a 1GB upload against a
+    // 900s window would otherwise conclude, wrongly, that it cannot be done.
+    const mint = async (mcp, args) => {
+        const r = await mcp.call('mikser_dav_token', args)
+        return r.isError ? { isError: true, text: r.content[0].text } : JSON.parse(r.content[0].text)
+    }
+    function bootMint(principal) {
+        const mcp = fakeSubstrate(principal)
+        registerWebdavMcp({
+            runtime: { options: { mcp, url: 'https://example.test', auth: {
+                mint: async ({ request, ttlSec }) => ({
+                    token: 'minted.x', jti: 'j', scopes: request, ttl: ttlSec,
+                    expiresAt: new Date(Date.now() + ttlSec * 1000).toISOString(),
+                }),
+            } } },
+            base: '/webdav', endpoints: ENDPOINTS,
+            capabilityOf: readCapability, writeCapabilityOf: writeCapability,
+        })
+        return mcp
+    }
+
+    it('says so in the response, not only in the tool description', async () => {
+        const t = await mint(bootMint(editor), { endpoint: 'media' })
+        assert.match(t.duration, /START a transfer/)
+        assert.match(t.duration, /runs to completion even after the token expires/)
+    })
+
+    it('names the thing that DOES bound a long upload', async () => {
+        // Pointing at the wrong constraint is how an operator raises a limit
+        // that was never the problem.
+        const t = await mint(bootMint(editor), { endpoint: 'media' })
+        assert.match(t.duration, /config\.server\.requestTimeout/)
+    })
+})
