@@ -67,11 +67,12 @@ describe('webdav_config registration', () => {
         }))
     })
 
-    it('is MCP-only — it must not reach the engine registry, and so not the CLI', () => {
-        // A caller with a shell is already on the machine with the folders in
-        // front of it. A mount config is noise there.
+    it('registers under the prefixed name the substrate uses', () => {
+        // The mirror into the engine's registry strips it back to
+        // `webdav_config`, so it answers on the CLI too. Aimed at a remote
+        // client, but one tool does not justify an exception in the registry.
         const mcp = boot(editor)
-        assert.equal(mcp.get('mikser_webdav_config').def.mcpOnly, true)
+        assert.deepEqual(mcp.names(), ['mikser_webdav_config'])
     })
 
     it('describes its one argument in the neutral vocabulary, needing no zod here', () => {
