@@ -1,74 +1,55 @@
 # mikser-io-drive
 
-> WebDAV over the working folder, authenticated through
-> [`mikser-io-auth`](https://github.com/almero-digital-marketing/mikser-io-auth).
-> Edit content from Finder, Explorer or any DAV client; the build picks the
-> change up.
+> Your content folders, as a drive. Mount them and edit; the site rebuilds.
+> Or let an agent put files there without giving it a route to your server.
 
-## What it is
+## What you get
 
-A [Nephele](https://github.com/sciactive/nephele) WebDAV server per endpoint,
-mounted on mikser's Express app, serving directories from the working folder.
-Because those directories are mikser *sources*, a `PUT` is a content change —
-the watcher sees it and the site rebuilds. That is the whole point, and also
-where the sharp edges are (see **Working-folder hazards**).
+**Edit content the way you already work.** Mount an endpoint in Finder or
+Explorer and the folder is just a folder — drag a photograph in, rename a
+directory, open a document in whatever app you like. Every change is a content
+change: the watcher sees it and the site rebuilds. No upload form, no admin UI
+to learn, no second copy of your content to keep in step.
 
-**Design choices, and why:**
+**Give an agent file access that costs almost nothing.** Four MCP tools carry
+bytes over the connection an agent already has, so it works from a sandbox with
+no network route to your host and from a desktop client with no shell. Ten
+photographs land in one call and one rebuild, each coming back with the string
+to paste into a page.
 
-- **One server per endpoint, at `<base>/<name>`.** The same shape as
-  `api`/`mcp`/`forms`. Nephele can multi-mount several adapters under one
-  server with a virtual root, and the URLs come out identical — but that
-  needs `@nephele/adapter-virtual`, keeps a fake directory tree in sync with
-  the mount keys, and puts per-endpoint auth behind a shared root. What is
-  given up is browsing the endpoint list over DAV, which `registerRoute`
-  already answers better.
+**Deletes and moves that know what they would break.** Removing a file that
+three documents still point at is refused, and it names all three — entity and
+field, including the one buried at `cta.cycle[6]`. Moving one can repoint them
+for you. The alternative is a green build and three broken images nobody sees
+until a customer does.
 
-- **`base` is not optional.** Plugin routes match before mikser's static
-  handler, so an endpoint at `/content` would silently shadow a real
-  `/content/` page in the built site.
+**Nothing disappears quietly.** An existing file is refused rather than
+overwritten unless you say so. A delete moves to trash rather than unlinking, so
+a wrong one is a move back. A batch that has one bad file in it writes none of
+them, so you are never left guessing what landed.
 
-- **Capabilities are derived from the endpoint name**, not configured.
-  `webdav:<name>` to mount and read it, `webdav:<name>:write` to write. A
-  group holding the first and not the second gets a read-only mount with no
-  flag involved.
+**Everyone sees only their own folders.** Access is per endpoint and per
+person: a reviewer reads `content` and cannot write it; an editor writes
+`content` and cannot touch `layouts`. The same grants apply whether someone is
+in Finder, a script, or an agent.
 
-- **Sidecar meta-files are off by default**, and safe if you turn them on.
-  Nephele defaults `properties` and `locks` to `'meta-files'`, which writes
-  sidecars *into the folder being served*. The shape is not what it looks
-  like: a collection's is `.nephelemeta` (dot-prefixed, already invisible to
-  mikser), but a file's is `page.md.nephelemeta` — **not** dot-prefixed, and
-  measurably imported as its own entity. The plugin declares
-  `*.nephelemeta` to the engine via `registerJunk`, so either mode is safe.
-  `'emulate'` stays the default for a plainer reason: a content folder people
-  browse and commit should not fill up with sidecars.
-
-- **Writes are staged and renamed.** The adapter opens the destination with
-  `'w'` and streams into it, which was measured to expose a growing partial
-  file *and* destroy the previous contents on an interrupted upload. Writes go
-  to a sibling `.part` file and `rename(2)` on success. `atomicWrites: false`
-  restores the adapter's behaviour.
-
-- **Basic auth only, so HTTPS.** WebDAV clients speak Basic or Digest, and
-  Digest needs the plaintext password — impossible against bcrypt hashes. The
-  plugin warns when the configured URL is plain `http` and not loopback.
-
-## Use
+## Set it up
 
 ```js
-import { webdav } from 'mikser-io-drive'
-import { auth }   from 'mikser-io-auth'
+import { drive } from 'mikser-io-drive'
+import { auth }  from 'mikser-io-auth'
 
 const identity = auth({
     capabilities: {
-        editors:   ['webdav:content', 'webdav:content:write'],
-        reviewers: ['webdav:content'],          // read-only, by grant
+        editors:   ['drive:content', 'drive:content:write'],
+        reviewers: ['drive:content'],          // read-only, by grant
     },
 })
 
 export default async () => ({
     plugins: [
         identity,
-        webdav({
+        drive({
             endpoints: {
                 content: { folder: 'documents' },
                 media:   { folder: 'files/media' },
@@ -80,25 +61,44 @@ export default async () => ({
 })
 ```
 
-Mount `https://cms.example.com/webdav/content` in your file manager.
+Then **Finder → Go → Connect to Server →** `https://cms.example.com/drive/content`,
+or point rclone or any DAV client at the same URL. Capabilities are derived from
+the endpoint name — `drive:<name>` to read it, `drive:<name>:write` to write —
+so the endpoint list above is the only place a folder is named.
 
-With no `capabilities` map at all, an authenticated user is unscoped and every
-endpoint is fully writable — the ADR-0012 default, the same as a static token.
-Capabilities only start refusing things once you have said what they mean.
+## For an agent
 
-### Endpoint options
+```
+mikser_drive_add({ endpoint, files: [{ name, base64, mime }], folder?, overwrite?, dryRun? })
+mikser_drive_read({ path })
+mikser_drive_move({ from, to, rewriteRefs?, dryRun? })
+mikser_drive_delete({ path, force?, dryRun? })
+```
 
-| | |
-| --- | --- |
-| `folder` | required; relative to the working folder, or absolute |
-| `readOnly` | hard cap — nobody writes here, whatever they hold |
-| `auth` / `token` | per-endpoint override of the plugin-level `auth` |
-| `allowRemote` | reachable without a credential (see the engine's rule) |
-| `properties` / `locks` | `'emulate'` (default), `'disallow'`, `'meta-files'` |
+`add` takes a whole batch so one build cycle picks it up, and returns for each
+file the reference to paste into a document plus any derived variants a preset
+produced. `read` gives back an image an agent can actually look at. `move` and
+`delete` refuse while something still references the file.
 
-`readOnly: true` and "you lack `webdav:<name>:write`" are different
-statements. The first is about the folder — a directory a build step owns, say
-— and the second is about the person.
+Bytes cost roughly 1.4 tokens each, so a page of photographs is cheap and a
+video is not: per file 2MB, per batch 8MB, above which they refuse and point at
+a mount, where the same folders are reachable and the bytes cost nothing.
+
+Page *text* stays on `mikser_update_entity` — it is checksum-guarded, previews
+what an edit would invalidate, and returns the build report. These tools never
+write documents.
+
+## How it works
+
+A [Nephele](https://github.com/sciactive/nephele) WebDAV server per endpoint,
+mounted on mikser's Express app, serving directories from the working folder.
+Because those directories are mikser *sources*, a `PUT` is a content change —
+which is the whole point, and also where the sharp edges are.
+
+One server per endpoint at `<base>/<name>`, the same shape as `api`/`mcp`/
+`forms`. Nephele can multi-mount several adapters under one server with a
+virtual root and the URLs come out identical, but a per-endpoint server keeps
+each mount's auth, capabilities and read-only flag independent.
 
 ## Working-folder hazards
 
@@ -256,51 +256,3 @@ One thing worth knowing if you extend this: Nephele's conditional-plugins hook
 before `authenticate`, so `response.locals.user` is always `undefined` there —
 including in the README example that tests it. Per-user decisions have to
 happen in the authenticator, which is where the write gate lives.
-
-## File operations for an agent
-
-Four tools carry bytes over the MCP connection itself, for a caller with no
-route to the host — a sandbox with no egress, a desktop client with no shell.
-
-```
-mikser_drive_add({ endpoint, files: [{ name, base64, mime }], folder?, overwrite?, dryRun? })
-mikser_drive_read({ path })
-mikser_drive_move({ from, to, rewriteRefs?, dryRun? })
-mikser_drive_delete({ path, force?, dryRun? })
-```
-
-Nothing here is media-specific. An endpoint is whatever the deployment
-configured, and what a stored file becomes is whatever that deployment's
-pipeline makes of it — the response reports what was actually stamped rather
-than assuming.
-
-**`add`** takes a whole batch in one call so a single build cycle picks it up:
-one `cycleId`, not one rebuild per file. Each file comes back with the
-`reference` to paste into a document — the served URL where the pipeline
-stamped one, the catalog id where it did not — and the derived variants any
-preset produced. It decodes and checks the whole batch before writing
-anything, so a bad file means nothing landed rather than half of it.
-
-**`read`** returns an image as an image you can look at, text as text, and
-anything else described. It reads the SOURCE; `mikser_read_output` reads what
-was built.
-
-**`move`** and **`delete`** refuse while anything still references the file,
-listing every (entity, field) that would break. `move` with `rewriteRefs: true`
-repoints them — reference strings here are plain rooted paths, so it rewrites
-the literal string and names every file it changed. `delete` moves to a trash
-folder under the runtime directory rather than unlinking, so a wrong delete is
-a move back.
-
-Both see values in entity meta, including inside arrays — not body text, and
-not links a layout builds at render time, which they say so an empty list is
-not read as "nothing at all".
-
-Bytes cost roughly 1.4 tokens each: ten typical images is cheap, a video is
-not. Per file 2MB, per batch 8MB; above that they refuse and point at a WebDAV
-mount, where the same folders are reachable with ordinary credentials and the
-bytes cost nothing.
-
-Page text stays on `mikser_update_entity`. These never write documents — a raw
-write there would lose the checksum guard, the blast-radius preview, the build
-report and the spec-locked advisory.
