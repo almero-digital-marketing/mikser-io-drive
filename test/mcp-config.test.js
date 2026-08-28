@@ -267,15 +267,30 @@ describe('mikser_webdav_access', () => {
         assert.equal((await mint(mcp, { endpoint: 'media' })).renewable, false)
     })
 
-    it('puts the literal token in exactly ONE place', async () => {
-        // The examples reference a placeholder, so the secret is not repeated
-        // into the transcript once per command.
+    it('returns examples that are runnable as written', async () => {
+        // These carried a $MIKSER_DAV_TOKEN placeholder so the secret would
+        // appear exactly once. An agent reading that either runs it literally
+        // and gets a 401, or has to infer a substitution step nobody announced
+        // — both worse than the exposure being avoided, since every occurrence
+        // lands in the same response anyway.
         const { mcp } = bootMint(editor)
         const t = await mint(mcp, { endpoint: 'media' })
-        const blob = JSON.stringify(t)
-        assert.equal(blob.split(t.token).length - 1, 1)
-        assert.match(JSON.stringify(t.examples), /\$MIKSER_DAV_TOKEN/)
-        assert.equal(JSON.stringify(t.examples).includes(t.token), false)
+        for (const [name, cmd] of Object.entries(t.examples)) {
+            assert.ok(cmd.includes(t.token), `${name} must carry the real credential`)
+            assert.equal(/\$MIKSER_DAV_TOKEN|<the token/.test(cmd), false,
+                `${name} must not ask the caller to substitute anything`)
+        }
+    })
+
+    it('still never returns the caller\'s session bearer', async () => {
+        // Inlining the MINTED token is the change; the session token — every
+        // endpoint, read and write, about an hour — is what must never appear.
+        const { mcp } = bootMint(editor)
+        const t = await mint(mcp, { endpoint: 'media' })
+        assert.notEqual(t.token, 'session-bearer-would-be-here')
+        assert.match(t.scopes.join(' '), /^webdav:media/)
+        assert.ok(t.ttl <= 900)
+        assert.ok(t.jti, 'and it must stay revokable')
     })
 
     it('withholds write on the documents endpoint without a second, explicit flag', async () => {

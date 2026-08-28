@@ -278,8 +278,8 @@ endpoint alone:
   hold; asking for more is refused with the missing scope named, and nothing
   is minted.
 - **revokable** by `jti` before it expires, for a leak.
-- the token appears **exactly once**; the examples reference
-  `$MIKSER_DAV_TOKEN`.
+- the examples come back **runnable as written**, credential already in
+  them.
 
 Nothing transfers through the tool. It hands over a door and the bytes move
 over HTTP, so a gigabyte costs the same few tokens as a thumbnail.
