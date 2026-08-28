@@ -256,3 +256,33 @@ One thing worth knowing if you extend this: Nephele's conditional-plugins hook
 before `authenticate`, so `response.locals.user` is always `undefined` there —
 including in the README example that tests it. Per-user decisions have to
 happen in the authenticator, which is where the write gate lives.
+
+## Getting a credential
+
+`mikser_webdav_config` tells an agent which endpoints exist and which it may
+write, but deliberately returns no credential — its response goes into a
+transcript.
+
+`mikser_dav_token({ endpoint, write?, ttl? })` mints one that is safe to put
+there:
+
+- **one endpoint**, never all of them. A token minted for `media` cannot reach
+  `layouts`.
+- **read-only unless `write: true`**.
+- **300s by default, 900s maximum.** Not renewable and not refreshable: expiry
+  IS the revocation mechanism, so a caller mints again rather than holding a
+  long-lived one.
+- **never wider than the caller.** Scopes are the intersection of what was asked
+  for and what the caller already holds; asking for more is refused with the
+  missing scope named, and nothing is minted.
+- **revokable** by `jti` before it expires, for a leak.
+- the token appears **exactly once** in the response; the examples reference
+  `$MIKSER_DAV_TOKEN` so the secret is not repeated per command.
+
+Write on the `content` endpoint needs `allowContentWrite: true` as well. A raw
+PUT into `documents/` loses four things `mikser_update_entity` gives you — the
+`ifChecksum` guard against overwriting someone else's edit, the `dryRun` blast
+radius, the build report, and the spec-locked advisory — so the second flag is
+there to make that a decision rather than an accident. Moving *files* in and out
+of the folder is the case it exists for.
+

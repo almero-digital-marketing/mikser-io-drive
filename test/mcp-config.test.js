@@ -67,12 +67,19 @@ describe('webdav_config registration', () => {
         }))
     })
 
-    it('registers under the prefixed name the substrate uses', () => {
-        // The mirror into the engine's registry strips it back to
-        // `webdav_config`, so it answers on the CLI too. Aimed at a remote
-        // client, but one tool does not justify an exception in the registry.
+    it('registers both tools under the prefixed names the substrate uses', () => {
+        // The mirror into the engine's registry strips the prefix back off, so
+        // they answer on the CLI too.
         const mcp = boot(editor)
-        assert.deepEqual(mcp.names(), ['mikser_webdav_config'])
+        assert.deepEqual(mcp.names().sort(), ['mikser_dav_token', 'mikser_webdav_config'])
+    })
+
+    it('points webdav_config at the minting tool instead of inlining a credential', async () => {
+        // The refusal to include one stays; what changes is that there is now
+        // somewhere to go for a credential that is safe to paste.
+        const body = await payload(boot(editor))
+        assert.match(body.token, /not included here on purpose/)
+        assert.match(body.token, /mikser_dav_token/)
     })
 
     it('describes its one argument in the neutral vocabulary, needing no zod here', () => {
@@ -174,5 +181,185 @@ describe('webdav_config output', () => {
         assert.equal(bad.isError, true)
         // Names what IS configured rather than only what is not.
         assert.match(bad.content[0].text, /content, media, data/)
+    })
+})
+
+// A credential handed to an agent, minted as small and as short-lived as the
+// task allows. Never the caller's session bearer: that one carries read AND
+// write on every endpoint for about an hour, and a transcript is a log.
+describe('mikser_dav_token', () => {
+    const mint = async (mcp, args) => {
+        const r = await mcp.call('mikser_dav_token', args)
+        return r.isError ? { isError: true, text: r.content[0].text } : JSON.parse(r.content[0].text)
+    }
+
+    // A stand-in minter with the same contract as the auth plugin's: it can
+    // only ever narrow, and it names what is missing when asked for more.
+    function bootMint(principal, { fail } = {}) {
+        const minted = []
+        const mcp = fakeSubstrate(principal)
+        const runtime = {
+            options: {
+                mcp, url: 'https://example.test',
+                auth: fail === 'no-minter' ? undefined : {
+                    mint: async ({ subject, capabilities, request, ttlSec, purpose }) => {
+                        const missing = request.filter(s => !(capabilities ?? []).includes(s))
+                        if (missing.length) {
+                            const err = new Error(`mint refused: you do not hold ${missing.join(', ')}`)
+                            err.missing = missing
+                            throw err
+                        }
+                        const rec = { subject, scopes: request, ttl: ttlSec, purpose,
+                                      token: 'minted.' + Math.random().toString(36).slice(2),
+                                      jti: 'jti-' + minted.length,
+                                      expiresAt: new Date(Date.now() + ttlSec * 1000).toISOString() }
+                        minted.push(rec)
+                        return rec
+                    },
+                },
+            },
+        }
+        registerWebdavMcp({
+            runtime, base: '/webdav', endpoints: ENDPOINTS,
+            capabilityOf: readCapability, writeCapabilityOf: writeCapability,
+        })
+        return { mcp, minted }
+    }
+
+    it('mints read-only by default', async () => {
+        const { mcp } = bootMint(editor)
+        const t = await mint(mcp, { endpoint: 'media' })
+        assert.deepEqual(t.scopes, ['webdav:media'])
+        assert.equal(t.write, false)
+    })
+
+    it('scopes to the named endpoint alone', async () => {
+        // A token minted for media must not open layouts. This is the property
+        // the whole tool exists for.
+        const { mcp } = bootMint(editor)
+        const t = await mint(mcp, { endpoint: 'media', write: false })
+        assert.ok(t.scopes.every(s => s.startsWith('webdav:media')))
+        assert.equal(t.scopes.some(s => s.includes('content')), false)
+    })
+
+    it('refuses a scope the caller does not hold, naming it, and mints nothing', async () => {
+        // `editor` holds webdav:media (read) but not :write.
+        const { mcp, minted } = bootMint({ subject: 'alice', capabilities: ['webdav:media'] })
+        const r = await mint(mcp, { endpoint: 'media', write: true })
+        assert.equal(r.isError, true)
+        assert.match(r.text, /webdav:media:write/)
+        assert.match(r.text, /Nothing was minted/)
+        assert.equal(minted.length, 0)
+    })
+
+    it('clamps ttl to the maximum and SAYS it clamped', async () => {
+        // Silently shortening it would have a caller plan a transfer around a
+        // number that was never true.
+        const { mcp } = bootMint(editor)
+        const t = await mint(mcp, { endpoint: 'media', ttl: 7200 })
+        assert.equal(t.ttl, 900)
+        assert.match(t.notes[0], /clamped from 7200s/)
+    })
+
+    it('defaults the ttl, and does not claim to have clamped when it did not', async () => {
+        const { mcp } = bootMint(editor)
+        const t = await mint(mcp, { endpoint: 'media' })
+        assert.equal(t.ttl, 300)
+        assert.equal(t.notes, undefined)
+    })
+
+    it('is never renewable — expiry IS the revocation', async () => {
+        const { mcp } = bootMint(editor)
+        assert.equal((await mint(mcp, { endpoint: 'media' })).renewable, false)
+    })
+
+    it('puts the literal token in exactly ONE place', async () => {
+        // The examples reference a placeholder, so the secret is not repeated
+        // into the transcript once per command.
+        const { mcp } = bootMint(editor)
+        const t = await mint(mcp, { endpoint: 'media' })
+        const blob = JSON.stringify(t)
+        assert.equal(blob.split(t.token).length - 1, 1)
+        assert.match(JSON.stringify(t.examples), /\$MIKSER_DAV_TOKEN/)
+        assert.equal(JSON.stringify(t.examples).includes(t.token), false)
+    })
+
+    it('withholds write on the documents endpoint without a second, explicit flag', async () => {
+        // A PUT there loses the ifChecksum guard, the blast radius, the build
+        // report and the spec-locked advisory. The refusal has to say so, or it
+        // reads as an arbitrary obstacle.
+        const { mcp, minted } = bootMint(editor)
+        const r = await mint(mcp, { endpoint: 'content', write: true })
+        assert.equal(r.isError, true)
+        assert.match(r.text, /allowContentWrite/)
+        assert.match(r.text, /update_entity/)
+        assert.match(r.text, /ifChecksum/)
+        assert.equal(minted.length, 0)
+    })
+
+    it('grants documents write when asked for twice', async () => {
+        const { mcp } = bootMint(editor)
+        const t = await mint(mcp, { endpoint: 'content', write: true, allowContentWrite: true })
+        assert.deepEqual(t.scopes, ['webdav:content', 'webdav:content:write'])
+    })
+
+    it('does not guard READ on documents', async () => {
+        const { mcp } = bootMint(editor)
+        assert.deepEqual((await mint(mcp, { endpoint: 'content' })).scopes, ['webdav:content'])
+    })
+
+    it('refuses write on an endpoint configured readOnly for everyone', async () => {
+        // Minting one would produce a token that 403s on its first PUT.
+        const { mcp } = bootMint(editor)
+        const r = await mint(mcp, { endpoint: 'data', write: true })
+        assert.equal(r.isError, true)
+        assert.match(r.text, /readOnly for everyone/)
+    })
+
+    it('refuses an endpoint that is not configured, naming the ones that are', async () => {
+        const { mcp } = bootMint(editor)
+        const r = await mint(mcp, { endpoint: 'nope' })
+        assert.equal(r.isError, true)
+        assert.match(r.text, /content, media, data/)
+    })
+
+    it('refuses when there is no authenticated caller to narrow from', async () => {
+        const { mcp } = bootMint(null)
+        const r = await mint(mcp, { endpoint: 'media' })
+        assert.equal(r.isError, true)
+        assert.match(r.text, /no identity here to narrow from/)
+    })
+
+    it('refuses when no authorization server is configured', async () => {
+        const { mcp } = bootMint(editor, { fail: 'no-minter' })
+        const r = await mint(mcp, { endpoint: 'media' })
+        assert.equal(r.isError, true)
+        assert.match(r.text, /nothing to mint from/)
+    })
+
+    it('records the purpose, so a mint is accountable afterwards', async () => {
+        // `editor` holds content read+write; media is read-only for them, which
+        // is why this asks for content.
+        const { mcp, minted } = bootMint(editor)
+        await mint(mcp, { endpoint: 'content', write: true, allowContentWrite: true })
+        assert.match(minted[0].purpose, /webdav:content \(write\)/)
+        assert.equal(minted[0].subject, 'alice')
+        assert.deepEqual(minted[0].scopes, ['webdav:content', 'webdav:content:write'])
+    })
+
+    it('mints nothing at all when it refuses — no partial credential', async () => {
+        // Every refusal path must leave the minter untouched, not mint a
+        // read token as a consolation prize.
+        for (const args of [
+            { endpoint: 'media', write: true },          // scope not held
+            { endpoint: 'content', write: true },        // guarded endpoint
+            { endpoint: 'data', write: true },           // readOnly endpoint
+            { endpoint: 'nope' },                        // unknown endpoint
+        ]) {
+            const { mcp, minted } = bootMint(editor)
+            const r = await mint(mcp, args)
+            assert.equal(r.isError, true, JSON.stringify(args))
+            assert.equal(minted.length, 0, `${JSON.stringify(args)} must mint nothing`)
+        }
     })
 })
