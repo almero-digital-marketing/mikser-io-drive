@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { registerRoute, resolveAuth, reachabilityOf, registerJunk } from 'mikser-io'
 import { MikserAuthenticator } from './lib/authenticator.js'
-import { registerWebdavMcp } from './lib/mcp.js'
+import { registerFileTools } from './lib/files.js'
 import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
 
 export { MikserAuthenticator, withStagedWrites, stageWrites }
@@ -192,34 +192,26 @@ export function webdav(options = {}) {
 
             logger.info('WebDAV mounted at %s (%s)', base, names.join(', '))
 
-            // An agent can already mount this with its bearer token; what it
-            // could not do was discover the endpoints and which of them its own
-            // capabilities let it write. Registered against the substrate
-            // rather than imported by mcp — domain tools live with the domain
-            // plugin, and this one knows things only this plugin knows.
-            registerWebdavMcp({
-                runtime, base, endpoints, logger,
+            // File operations over MCP, for an agent with no route to the
+            // host — a sandbox with no egress, a desktop client with no shell.
+            // Bytes ride the MCP connection that already works.
+            registerFileTools({
+                runtime, endpoints, logger,
                 capabilityOf: readCapability,
                 writeCapabilityOf: writeCapability,
             })
 
-            // Node caps a single request at 5 minutes, which bounds how large a
-            // file can be uploaded — 1GB needs better than 50 Mbps to fit.
-            //
-            // This plugin does not own listen(), but the engine exposes the
-            // knob: `config.server.requestTimeout` (ms, or 0 to disable). The
-            // note used to say the timeout could not be reached from here,
-            // which sent an operator hunting for something that does not
-            // exist instead of at a line of config.
-            const requestTimeout = runtime.config?.server?.requestTimeout
-            if (requestTimeout == null) {
-                logger.debug(
-                    'webdav: uploads are bounded by the server request timeout (node default 5m, so ~1GB at '
-                    + '50 Mbps). Raise or disable it with config.server.requestTimeout if large files matter.')
-            } else {
-                logger.debug('webdav: server request timeout is %s, so uploads are bounded by that',
-                    requestTimeout === 0 ? 'disabled' : `${requestTimeout}ms`)
-            }
+            // Uploads are bounded by the server request timeout. The engine
+            // raises it automatically because this registers streaming routes
+            // (see registerRoute above) — Node's 5-minute default is an upload
+            // size limit expressed in seconds, and a large file over a slow
+            // link is indistinguishable from a stalled request.
+            const configured = runtime.config?.server?.requestTimeout
+            logger.debug('webdav: uploads bounded by the server request timeout — %s',
+                configured == null
+                    ? 'raised automatically for these streaming routes; override with config.server.requestTimeout'
+                    : configured === 0 ? 'disabled by config.server.requestTimeout'
+                    : `${configured}ms from config.server.requestTimeout`)
         })
     }
 }

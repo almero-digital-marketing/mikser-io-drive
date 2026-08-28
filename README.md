@@ -257,35 +257,50 @@ before `authenticate`, so `response.locals.user` is always `undefined` there —
 including in the README example that tests it. Per-user decisions have to
 happen in the authenticator, which is where the write gate lives.
 
-## File access for an agent
+## File operations for an agent
 
-One tool, `mikser_webdav_access`, and the argument decides what you get.
+Four tools carry bytes over the MCP connection itself, for a caller with no
+route to the host — a sandbox with no egress, a desktop client with no shell.
 
-**No endpoint** — the map. Every endpoint, the folder behind it, and whether
-your own capabilities let you write there. No credential, because there is
-nothing to scope one to yet.
+```
+mikser_webdav_add({ endpoint, files: [{ name, base64, mime }], folder?, overwrite?, dryRun? })
+mikser_webdav_read({ path })
+mikser_webdav_move({ from, to, rewriteRefs?, dryRun? })
+mikser_webdav_delete({ path, force?, dryRun? })
+```
 
-**An endpoint** — the same answer for it, plus a credential minted for that
-endpoint alone:
+Nothing here is media-specific. An endpoint is whatever the deployment
+configured, and what a stored file becomes is whatever that deployment's
+pipeline makes of it — the response reports what was actually stamped rather
+than assuming.
 
-- **read-only unless `write: true`**
-- **300s by default, 900s maximum** — and that is how long you have to *start*
-  a transfer, not how long it may run. Authorization happens once, when the
-  request begins, so an upload that takes an hour completes fine on a token
-  that expired in its first minute. Long transfers are bounded instead by
-  `config.server.requestTimeout`.
-- **never wider than you.** Scopes are the intersection with what you already
-  hold; asking for more is refused with the missing scope named, and nothing
-  is minted.
-- **revokable** by `jti` before it expires, for a leak.
-- the examples come back **runnable as written**, credential already in
-  them.
+**`add`** takes a whole batch in one call so a single build cycle picks it up:
+one `cycleId`, not one rebuild per file. Each file comes back with the
+`reference` to paste into a document — the served URL where the pipeline
+stamped one, the catalog id where it did not — and the derived variants any
+preset produced. It decodes and checks the whole batch before writing
+anything, so a bad file means nothing landed rather than half of it.
 
-Nothing transfers through the tool. It hands over a door and the bytes move
-over HTTP, so a gigabyte costs the same few tokens as a thumbnail.
+**`read`** returns an image as an image you can look at, text as text, and
+anything else described. It reads the SOURCE; `mikser_read_output` reads what
+was built.
 
-Write on the `content` endpoint needs `allowContentWrite: true` as well. A raw
-PUT into `documents/` loses four things `mikser_update_entity` gives you — the
-`ifChecksum` guard, the `dryRun` blast radius, the build report, and the
-spec-locked advisory — so the second flag makes that a decision rather than an
-accident.
+**`move`** and **`delete`** refuse while anything still references the file,
+listing every (entity, field) that would break. `move` with `rewriteRefs: true`
+repoints them — reference strings here are plain rooted paths, so it rewrites
+the literal string and names every file it changed. `delete` moves to a trash
+folder under the runtime directory rather than unlinking, so a wrong delete is
+a move back.
+
+Both see values in entity meta, including inside arrays — not body text, and
+not links a layout builds at render time, which they say so an empty list is
+not read as "nothing at all".
+
+Bytes cost roughly 1.4 tokens each: ten typical images is cheap, a video is
+not. Per file 2MB, per batch 8MB; above that they refuse and point at a WebDAV
+mount, where the same folders are reachable with ordinary credentials and the
+bytes cost nothing.
+
+Page text stays on `mikser_update_entity`. These never write documents — a raw
+write there would lose the checksum guard, the blast-radius preview, the build
+report and the spec-locked advisory.
