@@ -257,32 +257,35 @@ before `authenticate`, so `response.locals.user` is always `undefined` there —
 including in the README example that tests it. Per-user decisions have to
 happen in the authenticator, which is where the write gate lives.
 
-## Getting a credential
+## File access for an agent
 
-`mikser_webdav_config` tells an agent which endpoints exist and which it may
-write, but deliberately returns no credential — its response goes into a
-transcript.
+One tool, `mikser_webdav_access`, and the argument decides what you get.
 
-`mikser_dav_token({ endpoint, write?, ttl? })` mints one that is safe to put
-there:
+**No endpoint** — the map. Every endpoint, the folder behind it, and whether
+your own capabilities let you write there. No credential, because there is
+nothing to scope one to yet.
 
-- **one endpoint**, never all of them. A token minted for `media` cannot reach
-  `layouts`.
-- **read-only unless `write: true`**.
-- **300s by default, 900s maximum.** Not renewable and not refreshable: expiry
-  IS the revocation mechanism, so a caller mints again rather than holding a
-  long-lived one.
-- **never wider than the caller.** Scopes are the intersection of what was asked
-  for and what the caller already holds; asking for more is refused with the
-  missing scope named, and nothing is minted.
+**An endpoint** — the same answer for it, plus a credential minted for that
+endpoint alone:
+
+- **read-only unless `write: true`**
+- **300s by default, 900s maximum** — and that is how long you have to *start*
+  a transfer, not how long it may run. Authorization happens once, when the
+  request begins, so an upload that takes an hour completes fine on a token
+  that expired in its first minute. Long transfers are bounded instead by
+  `config.server.requestTimeout`.
+- **never wider than you.** Scopes are the intersection with what you already
+  hold; asking for more is refused with the missing scope named, and nothing
+  is minted.
 - **revokable** by `jti` before it expires, for a leak.
-- the token appears **exactly once** in the response; the examples reference
-  `$MIKSER_DAV_TOKEN` so the secret is not repeated per command.
+- the token appears **exactly once**; the examples reference
+  `$MIKSER_DAV_TOKEN`.
+
+Nothing transfers through the tool. It hands over a door and the bytes move
+over HTTP, so a gigabyte costs the same few tokens as a thumbnail.
 
 Write on the `content` endpoint needs `allowContentWrite: true` as well. A raw
 PUT into `documents/` loses four things `mikser_update_entity` gives you — the
-`ifChecksum` guard against overwriting someone else's edit, the `dryRun` blast
-radius, the build report, and the spec-locked advisory — so the second flag is
-there to make that a decision rather than an accident. Moving *files* in and out
-of the folder is the case it exists for.
-
+`ifChecksum` guard, the `dryRun` blast radius, the build report, and the
+spec-locked advisory — so the second flag makes that a decision rather than an
+accident.

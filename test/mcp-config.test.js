@@ -39,7 +39,7 @@ function boot(principal, options = {}) {
     return mcp
 }
 
-const payload = async (mcp, args) => JSON.parse((await mcp.call('mikser_webdav_config', args)).content[0].text)
+const payload = async (mcp, args) => JSON.parse((await mcp.call('mikser_webdav_access', args)).content[0].text)
 const accessOf = (body, name) => body.endpoints.find(e => e.name === name)
 
 let editor
@@ -56,7 +56,7 @@ beforeEach(() => {
     }
 })
 
-describe('webdav_config registration', () => {
+describe('webdav_access registration', () => {
     it('registers only when there is an MCP surface to register against', () => {
         // No substrate, no tool — and no throw. A deployment without the mcp
         // plugin still mounts WebDAV perfectly well.
@@ -67,29 +67,29 @@ describe('webdav_config registration', () => {
         }))
     })
 
-    it('registers both tools under the prefixed names the substrate uses', () => {
+    it('registers ONE tool under the prefixed name the substrate uses', () => {
         // The mirror into the engine's registry strips the prefix back off, so
         // they answer on the CLI too.
         const mcp = boot(editor)
-        assert.deepEqual(mcp.names().sort(), ['mikser_dav_token', 'mikser_webdav_config'])
+        assert.deepEqual(mcp.names(), ['mikser_webdav_access'])
     })
 
-    it('points webdav_config at the minting tool instead of inlining a credential', async () => {
-        // The refusal to include one stays; what changes is that there is now
-        // somewhere to go for a credential that is safe to paste.
+    it('issues no credential when no endpoint is named', async () => {
+        // Nothing to scope one to yet, so there is nothing to hand over.
         const body = await payload(boot(editor))
-        assert.match(body.token, /not included here on purpose/)
-        assert.match(body.token, /mikser_dav_token/)
+        assert.equal(body.token, undefined)
+        assert.match(body.credential, /None issued/)
+        assert.match(body.credential, /naming an endpoint/)
     })
 
     it('describes its one argument in the neutral vocabulary, needing no zod here', () => {
-        const schema = boot(editor).get('mikser_webdav_config').def.inputSchema
+        const schema = boot(editor).get('mikser_webdav_access').def.inputSchema
         assert.equal(schema.endpoint.type, 'string')
         assert.ok(schema.endpoint.description)
     })
 })
 
-describe('webdav_config access, computed from the CALLER', () => {
+describe('webdav_access access, computed from the CALLER', () => {
     it('reports read-write only where the caller holds the write capability', async () => {
         const body = await payload(boot(editor))
         assert.equal(accessOf(body, 'content').access, 'read-write')
@@ -114,8 +114,6 @@ describe('webdav_config access, computed from the CALLER', () => {
         const stranger = { subject: 'bob', capabilities: ['mcp:use'] }
         const body = await payload(boot(stranger))
         assert.ok(body.endpoints.every(e => e.access === 'none'))
-        // And offers no config for what cannot be used.
-        assert.equal(body.rcloneConfig, '')
     })
 
     it('says unknown rather than guessing for a credential that is not capability-scoped', async () => {
@@ -127,15 +125,16 @@ describe('webdav_config access, computed from the CALLER', () => {
     })
 })
 
-describe('webdav_config output', () => {
-    it('carries a placeholder, never a credential', async () => {
-        // This response lands in the caller's transcript. The caller already
-        // holds the token; putting it here would be a new exposure for a saved
-        // string substitution.
+describe('webdav_access output', () => {
+    it('the map carries no commands to run, because it carries no credential', async () => {
+        // The old split returned a config full of $MIKSER_TOKEN placeholders
+        // beside a second tool that returned a real one. Two responses with a
+        // `token` field meaning different things is the confusion this merge
+        // removes: the map describes, the keyed call hands over.
         const body = await payload(boot(editor))
-        assert.match(body.rcloneConfig, /bearer_token = \$MIKSER_TOKEN/)
-        assert.match(body.curl, /\$MIKSER_TOKEN/)
-        assert.match(body.token, /not included here on purpose/)
+        assert.equal(body.token, undefined)
+        assert.equal(body.examples, undefined)
+        assert.equal(body.rcloneConfig, undefined)
     })
 
     it('builds URLs from the engine\'s external url, not from a guess', async () => {
@@ -143,24 +142,15 @@ describe('webdav_config output', () => {
             'https://example.test/webdav/content')
     })
 
-    it('omits from the pasteable config what the caller cannot use', async () => {
+    it('lists every endpoint, so the caller can see what to ask for', async () => {
         const body = await payload(boot(editor))
-        assert.match(body.rcloneConfig, /\[mikser-content\]/)
-        assert.match(body.rcloneConfig, /\[mikser-media\]/)   // read-only is still usable
-        const stranger = await payload(boot({ subject: 'bob', capabilities: [] }))
-        assert.equal(stranger.rcloneConfig, '')
+        assert.deepEqual(body.endpoints.map(e => e.name), ['content', 'media', 'data'])
+        assert.equal(body.origin, 'https://example.test')
     })
 
-    it('names the expiry, because a long transfer can outlive the token', async () => {
+    it('says a credential is available rather than leaving the caller to guess', async () => {
         const body = await payload(boot(editor))
-        assert.equal(body.secondsRemaining, 1800)
-        assert.match(body.expiry, /offline_access/)
-    })
-
-    it('omits expiry talk for a credential that has none', async () => {
-        const body = await payload(boot({ subject: 'static', capabilities: ['webdav:content'] }))
-        assert.equal(body.expiresAt, undefined)
-        assert.equal(body.expiry, undefined)
+        assert.match(body.credential, /naming an endpoint/)
     })
 
     it('says out loud what it does NOT cover', async () => {
@@ -172,24 +162,28 @@ describe('webdav_config output', () => {
         assert.ok(body.notCovered.some(n => /written to disk/.test(n)))
     })
 
-    it('narrows to one endpoint, and refuses a name that is not configured', async () => {
-        const mcp = boot(editor)
-        const one = await payload(mcp, { endpoint: 'media' })
-        assert.deepEqual(one.endpoints.map(e => e.name), ['media'])
-
-        const bad = await mcp.call('mikser_webdav_config', { endpoint: 'nope' })
+    it('refuses a name that is not configured, naming the ones that are', async () => {
+        const bad = await boot(editor).call('mikser_webdav_access', { endpoint: 'nope' })
         assert.equal(bad.isError, true)
-        // Names what IS configured rather than only what is not.
         assert.match(bad.content[0].text, /content, media, data/)
+    })
+
+    it('explains itself when there is no authorization server to mint from', async () => {
+        // The map still works without one — only the keyed call needs it.
+        const mcp = boot(editor)
+        const r = await mcp.call('mikser_webdav_access', { endpoint: 'media' })
+        assert.equal(r.isError, true)
+        assert.match(r.content[0].text, /nothing to mint from/)
+        assert.match(r.content[0].text, /without an endpoint still lists/)
     })
 })
 
 // A credential handed to an agent, minted as small and as short-lived as the
 // task allows. Never the caller's session bearer: that one carries read AND
 // write on every endpoint for about an hour, and a transcript is a log.
-describe('mikser_dav_token', () => {
+describe('mikser_webdav_access', () => {
     const mint = async (mcp, args) => {
-        const r = await mcp.call('mikser_dav_token', args)
+        const r = await mcp.call('mikser_webdav_access', args)
         return r.isError ? { isError: true, text: r.content[0].text } : JSON.parse(r.content[0].text)
     }
 
@@ -370,7 +364,7 @@ describe('the ttl bounds the START of a transfer, not its duration', () => {
     // at the beginning of the request. A caller sizing a 1GB upload against a
     // 900s window would otherwise conclude, wrongly, that it cannot be done.
     const mint = async (mcp, args) => {
-        const r = await mcp.call('mikser_dav_token', args)
+        const r = await mcp.call('mikser_webdav_access', args)
         return r.isError ? { isError: true, text: r.content[0].text } : JSON.parse(r.content[0].text)
     }
     function bootMint(principal) {
