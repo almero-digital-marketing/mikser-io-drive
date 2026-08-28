@@ -112,14 +112,29 @@ before(async (t) => {
         path.join(dir, 'node_modules/mikser-io/app.js'),
         '--working-folder', dir, '--output-folder', 'out', '--runtime-folder', 'runtime',
         '--watch', '--server', String(PORT), '--url', `http://127.0.0.1:${PORT}`,
-    ], { cwd: dir, stdio: 'ignore' })
+    ], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
+
+    // Kept so a server that never comes up says WHY. Throwing this away left
+    // the failure as a bare ECONNREFUSED, which names the symptom and hides
+    // every cause — the one thing this fixture exists to avoid.
+    let output = ''
+    server.stdout.on('data', (d) => { output += d })
+    server.stderr.on('data', (d) => { output += d })
+    let exited = null
+    server.on('exit', (code, signal) => { exited = signal ?? code })
 
     // Wait for it to answer rather than sleeping a guess.
-    for (let i = 0; i < 60; i++) {
+    let up = false
+    for (let i = 0; i < 60 && !up && exited === null; i++) {
         try {
             const res = await fetch(`http://127.0.0.1:${PORT}/mcp`, { method: 'POST' })
-            if (res.status) break
+            if (res.status) up = true
         } catch { await new Promise(r => setTimeout(r, 1000)) }
+    }
+    if (!up) {
+        throw new Error(`the fixture server never answered on :${PORT}`
+            + (exited === null ? ' (still running)' : ` (exited ${exited})`)
+            + `\n\n${output.trim() || '(it printed nothing)'}`)
     }
     await new Promise(r => setTimeout(r, 3000))
 })

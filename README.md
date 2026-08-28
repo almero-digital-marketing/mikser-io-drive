@@ -71,14 +71,19 @@ so the endpoint list above is the only place a folder is named.
 ```
 mikser_drive_add({ endpoint, files: [{ name, base64, mime }], folder?, overwrite?, dryRun? })
 mikser_drive_read({ path })
-mikser_drive_move({ from, to, rewriteRefs?, dryRun? })
-mikser_drive_delete({ path, force?, dryRun? })
+mikser_drive_move({ moves: [{ from, to }], rewriteRefs?, dryRun? })
+mikser_drive_delete({ paths: [path], force?, dryRun? })
 ```
 
-`add` takes a whole batch so one build cycle picks it up, and returns for each
-file the reference to paste into a document plus any derived variants a preset
-produced. `read` gives back an image an agent can actually look at. `move` and
-`delete` refuse while something still references the file.
+Every writing tool takes a whole batch, because a build cycle is the unit of
+cost: three files sent together are one cycle and one rebuild, where three
+calls are three of each. A batch is all-or-nothing — if any entry cannot be
+applied, none are, and every reason is listed.
+
+`add` returns for each file the reference to paste into a document plus any
+derived variants a preset produced. `read` gives back an image an agent can
+actually look at. `move` and `delete` refuse while something still references
+the file.
 
 Bytes cost roughly 1.4 tokens each, so a page of photographs is cheap and a
 video is not: per file 2MB, per batch 8MB, above which they refuse and point at

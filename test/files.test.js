@@ -174,42 +174,82 @@ describe('read', () => {
 })
 
 describe('delete', () => {
+    const put = (name, text) => call('mikser_drive_add',
+        { endpoint: 'media', files: [{ name, base64: b64(text) }] })
+
     it('moves to trash rather than unlinking, and can be undone', async () => {
-        await call('mikser_drive_add', { endpoint: 'media', files: [{ name: 'bye.txt', base64: b64('content') }] })
-        const r = body(await call('mikser_drive_delete', { path: 'media/bye.txt' }))
-        assert.equal(r.removed, true)
+        await put('bye.txt', 'content')
+        const r = body(await call('mikser_drive_delete', { paths: ['media/bye.txt'] }))
+        assert.equal(r.removed, 1)
         await assert.rejects(() => stat(path.join(dir, 'media/bye.txt')), 'gone from the folder')
         // Still on disk, so a wrong delete is a move back and not a restore.
         assert.ok(await stat(path.join(dir, r.trash)))
-        assert.match(r.restore, /Move it back/)
+        assert.match(r.restore, /Move everything back/)
+    })
+
+    it('reports one cycle and one trash stamp for the whole batch', async () => {
+        // The reason the batch form exists. Three separate calls cost three
+        // cycles and three rebuilds; sent together they cost one.
+        //
+        // What is asserted is what is observable: a single reported cycleId and
+        // a single trash stamp. That only ONE cycle runs comes from claiming it
+        // before the first rename — nextCycleId() predicts the next cycle from
+        // the current one, so it cannot be counted from here.
+        await put('c1.txt', '1')
+        await put('c2.txt', '2')
+        await put('c3.txt', '3')
+        const r = body(await call('mikser_drive_delete',
+            { paths: ['media/c1.txt', 'media/c2.txt', 'media/c3.txt'] }))
+        assert.equal(r.removed, 3)
+        assert.equal(r.files.length, 3)
+        assert.ok(r.cycleId != null, 'one cycle claimed for the batch')
+        // All three under one trash stamp, so undoing the batch is one move.
+        assert.equal(new Set(r.files.map(f => path.dirname(path.dirname(f.trash)))).size, 1)
+    })
+
+    it('removes nothing when any path in the batch is bad', async () => {
+        await put('good.txt', 'x')
+        const r = await call('mikser_drive_delete', { paths: ['media/good.txt', 'media/nosuch.txt'] })
+        assert.equal(r.isError, true)
+        assert.match(r.content[0].text, /all-or-nothing/)
+        assert.ok(await stat(path.join(dir, 'media/good.txt')), 'the valid one was left alone')
+    })
+
+    it('refuses the same file listed twice rather than failing mid-batch', async () => {
+        await put('twice.txt', 'x')
+        const r = await call('mikser_drive_delete', { paths: ['media/twice.txt', 'media/twice.txt'] })
+        assert.equal(r.isError, true)
+        assert.match(r.content[0].text, /listed twice/)
+        assert.ok(await stat(path.join(dir, 'media/twice.txt')))
     })
 
     it('puts trash OUTSIDE the served folder', async () => {
         // Inside it, the file would be republished at a new URL and, where git
         // sync is on, committed.
-        await call('mikser_drive_add', { endpoint: 'media', files: [{ name: 'gone.txt', base64: b64('x') }] })
-        const r = body(await call('mikser_drive_delete', { path: 'media/gone.txt' }))
+        await put('gone.txt', 'x')
+        const r = body(await call('mikser_drive_delete', { paths: ['media/gone.txt'] }))
         assert.equal(r.trash.startsWith('media/'), false, `trash must not be inside the endpoint: ${r.trash}`)
     })
 
     it('refuses a readOnly endpoint', async () => {
         await writeFile(path.join(dir, 'locked/x.txt'), 'x')
-        const r = await call('mikser_drive_delete', { path: 'locked/x.txt' })
+        const r = await call('mikser_drive_delete', { paths: ['locked/x.txt'] })
         assert.equal(r.isError, true)
         assert.match(r.content[0].text, /readOnly/)
     })
 
     it('dryRun removes nothing', async () => {
-        await call('mikser_drive_add', { endpoint: 'media', files: [{ name: 'keep.txt', base64: b64('x') }] })
-        const r = body(await call('mikser_drive_delete', { path: 'media/keep.txt', dryRun: true }))
+        await put('keep.txt', 'x')
+        const r = body(await call('mikser_drive_delete', { paths: ['media/keep.txt'], dryRun: true }))
         assert.equal(r.dryRun, true)
+        assert.equal(r.wouldRemove, 1)
         assert.ok(await stat(path.join(dir, 'media/keep.txt')))
     })
 
     it('always states what its reference check does NOT cover', async () => {
         // An empty list means "nothing of the kind I look at", not "nothing".
-        await call('mikser_drive_add', { endpoint: 'media', files: [{ name: 'cov.txt', base64: b64('x') }] })
-        const r = body(await call('mikser_drive_delete', { path: 'media/cov.txt', dryRun: true }))
+        await put('cov.txt', 'x')
+        const r = body(await call('mikser_drive_delete', { paths: ['media/cov.txt'], dryRun: true }))
         assert.match(r.coverage, /NOT body text/)
     })
 })
@@ -217,19 +257,79 @@ describe('delete', () => {
 describe('move', () => {
     const put = (name, text) => call('mikser_drive_add',
         { endpoint: 'media', files: [{ name, base64: b64(text) }] })
+    const move = (moves, rest) => call('mikser_drive_move', { moves, ...rest })
 
     it('moves a file that nothing references', async () => {
         await put('loose.txt', 'x')
-        const r = body(await call('mikser_drive_move', { from: 'media/loose.txt', to: 'moved/loose.txt' }))
-        assert.equal(r.moved, true)
+        const r = body(await move([{ from: 'media/loose.txt', to: 'moved/loose.txt' }]))
+        assert.equal(r.moved, 1)
         assert.ok(await stat(path.join(dir, 'media/moved/loose.txt')))
         await assert.rejects(() => stat(path.join(dir, 'media/loose.txt')))
+    })
+
+    it('reports one cycle for the whole batch', async () => {
+        await put('b1.txt', '1')
+        await put('b2.txt', '2')
+        const r = body(await move([
+            { from: 'media/b1.txt', to: 'bulk/b1.txt' },
+            { from: 'media/b2.txt', to: 'bulk/b2.txt' },
+        ]))
+        assert.equal(r.moved, 2)
+        assert.ok(r.cycleId != null, 'one cycle claimed for the batch')
+        assert.ok(await stat(path.join(dir, 'media/bulk/b1.txt')))
+        assert.ok(await stat(path.join(dir, 'media/bulk/b2.txt')))
+    })
+
+    it('moves nothing when any entry in the batch is bad', async () => {
+        await put('ok1.txt', 'x')
+        const r = await move([
+            { from: 'media/ok1.txt', to: 'fine.txt' },
+            { from: 'media/absent.txt', to: 'wherever.txt' },
+        ])
+        assert.equal(r.isError, true)
+        assert.match(r.content[0].text, /all-or-nothing/)
+        assert.ok(await stat(path.join(dir, 'media/ok1.txt')), 'the valid one was left alone')
+    })
+
+    it('refuses two entries landing on one destination', async () => {
+        await put('t1.txt', '1')
+        await put('t2.txt', '2')
+        const r = await move([
+            { from: 'media/t1.txt', to: 'same-target.txt' },
+            { from: 'media/t2.txt', to: 'same-target.txt' },
+        ])
+        assert.equal(r.isError, true)
+        assert.match(r.content[0].text, /both move onto/)
+    })
+
+    it('refuses one source moved twice', async () => {
+        await put('twice-src.txt', 'x')
+        const r = await move([
+            { from: 'media/twice-src.txt', to: 'first.txt' },
+            { from: 'media/twice-src.txt', to: 'second.txt' },
+        ])
+        assert.equal(r.isError, true)
+        assert.match(r.content[0].text, /listed twice/)
+    })
+
+    it('refuses a chain, because the outcome would depend on order', async () => {
+        // A→B, B→C. B exists, so the clash check catches it before anything
+        // moves — no separate ordering check needed.
+        await put('ch1.txt', '1')
+        await put('ch2.txt', '2')
+        const r = await move([
+            { from: 'media/ch1.txt', to: 'ch2.txt' },
+            { from: 'media/ch2.txt', to: 'ch3.txt' },
+        ])
+        assert.equal(r.isError, true)
+        assert.equal(await readFile(path.join(dir, 'media/ch1.txt'), 'utf8'), '1')
+        assert.equal(await readFile(path.join(dir, 'media/ch2.txt'), 'utf8'), '2')
     })
 
     it('refuses to land on something that already exists', async () => {
         await put('a.txt', 'a')
         await put('b.txt', 'b')
-        const r = await call('mikser_drive_move', { from: 'media/a.txt', to: 'b.txt' })
+        const r = await move([{ from: 'media/a.txt', to: 'b.txt' }])
         assert.equal(r.isError, true)
         assert.match(r.content[0].text, /already exists/)
         // Neither file moved.
@@ -239,30 +339,30 @@ describe('move', () => {
 
     it('refuses a destination that would escape the endpoint', async () => {
         await put('stay.txt', 'x')
-        const r = await call('mikser_drive_move', { from: 'media/stay.txt', to: '../../escaped.txt' })
+        const r = await move([{ from: 'media/stay.txt', to: '../../escaped.txt' }])
         assert.equal(r.isError, true)
         assert.ok(await stat(path.join(dir, 'media/stay.txt')))
     })
 
     it('refuses a no-op move rather than pretending it did something', async () => {
         await put('same.txt', 'x')
-        const r = await call('mikser_drive_move', { from: 'media/same.txt', to: 'same.txt' })
+        const r = await move([{ from: 'media/same.txt', to: 'same.txt' }])
         assert.equal(r.isError, true)
         assert.match(r.content[0].text, /same path/)
     })
 
     it('states what its reference check does not cover', async () => {
         await put('cover.txt', 'x')
-        const r = body(await call('mikser_drive_move',
-            { from: 'media/cover.txt', to: 'elsewhere.txt', dryRun: true }))
+        const r = body(await move([{ from: 'media/cover.txt', to: 'elsewhere.txt' }], { dryRun: true }))
         assert.equal(r.dryRun, true)
+        assert.equal(r.wouldMove, 1)
         assert.match(r.coverage, /NOT body text/)
         assert.ok(await stat(path.join(dir, 'media/cover.txt')), 'dryRun moves nothing')
     })
 
     it('refuses a readOnly endpoint', async () => {
         await writeFile(path.join(dir, 'locked/ro.txt'), 'x')
-        const r = await call('mikser_drive_move', { from: 'locked/ro.txt', to: 'other.txt' })
+        const r = await move([{ from: 'locked/ro.txt', to: 'other.txt' }])
         assert.equal(r.isError, true)
         assert.match(r.content[0].text, /readOnly/)
     })
