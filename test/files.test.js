@@ -160,11 +160,82 @@ describe('read', () => {
     })
 
     it('describes a binary it cannot show rather than returning garbage', async () => {
-        await call('mikser_drive_add', { endpoint: 'media', files: [{ name: 'font.woff2', base64: b64(' ') }] })
+        // Genuinely binary bytes. The previous fixture was a single SPACE
+        // named .woff2, which passed only because the extension was unknown —
+        // it asserted the old extension rule, not the behaviour the name
+        // describes, and a real font would have been indistinguishable from a
+        // real template.
+        const woff2 = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0x01, 0x00, 0x00])
+        await call('mikser_drive_add', { endpoint: 'media', files: [
+            { name: 'font.woff2', base64: woff2.toString('base64') } ] })
         const r = body(await call('mikser_drive_read', { path: 'media/font.woff2' }))
         assert.equal(r.viewed, false)
         assert.equal(r.content, undefined)
         assert.match(r.note, /convincing garbage/)
+    })
+
+    // The reported bug: `.liquid` mapped to application/octet-stream, so the
+    // tool refused to return a template this very engine renders — leaving a
+    // caller with a stale catalog copy, two checksums, and no way to see the
+    // bytes it was about to overwrite.
+    it('returns a template whose extension it has never heard of', async () => {
+        const template = '{% assign city = "Лозенец" %}\n<h1>{{ city }}</h1>\n'
+        await call('mikser_drive_add', { endpoint: 'media', files: [
+            { name: 'page.liquid', base64: Buffer.from(template, 'utf8').toString('base64') } ] })
+        const r = body(await call('mikser_drive_read', { path: 'media/page.liquid' }))
+        assert.equal(r.content, template, 'the actual disk bytes, not a refusal')
+        assert.equal(r.contentComplete, true)
+        assert.equal(r.typedBy, 'content', 'and it should say the extension was not what decided this')
+    })
+
+    it('does the same for any other textual extension, without a list to keep', async () => {
+        // One test per render plugin is the shape this fix exists to avoid.
+        for (const [name, text] of [
+            ['view.hbs', '<h1>{{title}}</h1>'],
+            ['view.eta', '<h1><%= it.title %></h1>'],
+            ['conf.toml', 'title = "x"\n'],
+            ['rows.csv', 'a,b\n1,2\n'],
+            ['query.sql', 'select 1;\n'],
+            ['notes.rst', 'Title\n=====\n'],
+        ]) {
+            await call('mikser_drive_add', { endpoint: 'media', files: [
+                { name, base64: Buffer.from(text, 'utf8').toString('base64') } ] })
+            const r = body(await call('mikser_drive_read', { path: `media/${name}` }))
+            assert.equal(r.content, text, `${name} must come back as text`)
+        }
+    })
+
+    it('names types the old hand-written map had never heard of', async () => {
+        // The map covered eighteen extensions. Everything else was
+        // `application/octet-stream`, which is both a wrong label and, under
+        // the old rule, a refusal to return the content.
+        const woff2 = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0x01, 0x00, 0x00])
+        await call('mikser_drive_add', { endpoint: 'media', files: [
+            { name: 'body.woff2', base64: woff2.toString('base64') } ] })
+        assert.equal(body(await call('mikser_drive_read', { path: 'media/body.woff2' })).mime, 'font/woff2')
+    })
+
+    it('returns an svg as text instead of refusing it', async () => {
+        // image/svg+xml was in neither the viewable set nor the textual
+        // pattern, so the one image format that IS text fell between them.
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>'
+        await call('mikser_drive_add', { endpoint: 'media', files: [
+            { name: 'mark.svg', base64: Buffer.from(svg, 'utf8').toString('base64') } ] })
+        const r = body(await call('mikser_drive_read', { path: 'media/mark.svg' }))
+        assert.equal(r.mime, 'image/svg+xml')
+        assert.equal(r.content, svg)
+    })
+
+    it('does not mistake corrupt bytes for a cut-off character', async () => {
+        // C3 28 is invalid UTF-8, not a truncated codepoint. A classifier that
+        // retries while chopping bytes off the end decodes the remainder
+        // cleanly and calls a binary file text.
+        const corrupt = Buffer.from([0x74, 0x65, 0x78, 0x74, 0xc3, 0x28])
+        await call('mikser_drive_add', { endpoint: 'media', files: [
+            { name: 'broken.bin', base64: corrupt.toString('base64') } ] })
+        const r = body(await call('mikser_drive_read', { path: 'media/broken.bin' }))
+        assert.equal(r.content, undefined)
+        assert.equal(r.viewed, false)
     })
 
     it('says so when there is nothing there', async () => {
