@@ -438,3 +438,61 @@ describe('move', () => {
         assert.match(r.content[0].text, /readOnly/)
     })
 })
+
+// Reads are capability-gated, the same as the WebDAV mount.
+//
+// The mount has always checked `drive:<name>` before serving a byte; this tool
+// did not, so the two surfaces disagreed about the same endpoint and a
+// `readOnly` list derived from capabilities described a rule only half the
+// transports enforced.
+describe('read capability', () => {
+    const toolsFor = async (principal) => {
+        const substrate = fakeSubstrate(principal)
+        registerFileTools({
+            runtime: {
+                options: {
+                    ...runtime.options, mcp: substrate,
+                    roles: {
+                        catalogue: {
+                            editors: ['drive:media', 'drive:media:write', 'drive:secrets'],
+                            developers: ['drive:media', 'drive:media:write', 'drive:secrets', 'drive:secrets:write'],
+                        },
+                        summaries: { developers: 'Everything an editor has, plus the code.' },
+                    },
+                },
+                refs: runtime.refs,
+            },
+            endpoints: { media: { folder: 'media' }, secrets: { folder: 'locked' } },
+            capabilityOf: readCapability, writeCapabilityOf: writeCapability,
+        })
+        return substrate
+    }
+
+    it('serves a file the principal may read', async () => {
+        await call('mikser_drive_add', { endpoint: 'media', files: [{ name: 'readable.txt', base64: b64('hello') }] })
+        const substrate = await toolsFor({ subject: 'ed', roles: ['editors'],
+                                           capabilities: ['drive:media', 'drive:media:write'] })
+        const r = await substrate.call('mikser_drive_read', { path: 'media/readable.txt' })
+        assert.equal(JSON.parse(r.content.find(c => c.type === 'text').text).content, 'hello')
+    })
+
+    it('refuses one it may not, naming the role and who can', async () => {
+        const substrate = await toolsFor({ subject: 'ed', roles: ['editors'],
+                                           capabilities: ['drive:media', 'drive:media:write'] })
+        const r = await substrate.call('mikser_drive_read', { path: 'secrets/anything.txt' })
+        assert.equal(r.isError, true)
+        const message = r.content.find(c => c.type === 'text').text
+        assert.match(message, /Connected as editors/, 'the refusal names the acting role')
+        assert.match(message, /drive:secrets/, 'and the capability it lacks')
+        assert.match(message, /developers/, 'and who carries it')
+        assert.doesNotMatch(message, /request|escalat|retry/i, 'and never suggests obtaining it')
+    })
+
+    it('does not narrow a credential that is not capability-scoped', async () => {
+        // A static token or a loopback caller. The endpoint's own gate still
+        // applies; this must not guess a narrower answer.
+        const substrate = await toolsFor({ subject: 'static', capabilities: null })
+        const r = await substrate.call('mikser_drive_read', { path: 'media/readable.txt' })
+        assert.notEqual(r.isError, true)
+    })
+})
