@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { registerRoute, resolveAuth, reachabilityOf, registerJunk } from 'mikser-io'
+import { registerRoute, resolveAuth, reachabilityOf, registerJunk, registerCapability } from 'mikser-io'
 import { MikserAuthenticator } from './lib/authenticator.js'
 import { registerFileTools } from './lib/files.js'
 import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
@@ -126,6 +126,25 @@ export function drive(options = {}) {
                 }
                 const root = resolve(ep.folder)
                 const mountPath = `${base}/${name}`
+
+                // Say what these capabilities protect, so a session can be
+                // told what it may reach in terms of the SITE rather than in
+                // terms of verbs. This is the only place that knows the folder
+                // behind an endpoint, and `summary` is the operator's own
+                // description of what lives there — both are what an agent
+                // needs to reason about where it is working.
+                registerCapability(readCapability(name), {
+                    plugin: 'drive',
+                    grants: 'read',
+                    resource: { kind: 'collection', name, folder: ep.folder, summary: ep.summary },
+                })
+                if (!(ep.readOnly === true)) {
+                    registerCapability(writeCapability(name), {
+                        plugin: 'drive',
+                        grants: 'write',
+                        resource: { kind: 'collection', name, folder: ep.folder, summary: ep.summary },
+                    })
+                }
 
                 // Same seam and the same one difference as api/mcp/forms: a
                 // plain token keeps the trusted-local-host model, a real
