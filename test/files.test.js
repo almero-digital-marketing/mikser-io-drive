@@ -4,7 +4,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { runtime } from 'mikser-io'
+import { runtime, provideService, resetServices } from 'mikser-io'
 import { registerFileTools } from '../lib/files.js'
 import { readCapability, writeCapability } from '../index.js'
 
@@ -41,8 +41,10 @@ before(async () => {
     runtime.options = { ...runtime.options, workingFolder: dir, runtimeFolder: path.join(dir, 'runtime') }
 
     mcp = fakeSubstrate({ subject: 'alice', capabilities: ['drive:media', 'drive:media:write'] })
+    resetServices()
+    provideService('mcp', mcp)
     registerFileTools({
-        runtime: { options: { ...runtime.options, mcp }, refs: runtime.refs },
+        runtime: { options: { ...runtime.options }, refs: runtime.refs },
         endpoints: { media: { folder: 'media' }, locked: { folder: 'locked', readOnly: true } },
         capabilityOf: readCapability, writeCapabilityOf: writeCapability,
     })
@@ -448,10 +450,12 @@ describe('move', () => {
 describe('read capability', () => {
     const toolsFor = async (principal) => {
         const substrate = fakeSubstrate(principal)
+        resetServices()
+        provideService('mcp', substrate)
         registerFileTools({
             runtime: {
                 options: {
-                    ...runtime.options, mcp: substrate,
+                    ...runtime.options,
                     roles: {
                         catalogue: {
                             editors: ['drive:media', 'drive:media:write', 'drive:secrets'],
