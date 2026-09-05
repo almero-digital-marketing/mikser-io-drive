@@ -94,7 +94,8 @@ before(async (t) => {
     // `match` against the ID shape, which the files plugin builds from the path
     // inside filesFolder — NOT the URL shape.
     await writeFile(path.join(dir, 'mikser.config.js'),
-        "import { files, assets, renderPreset } from 'mikser-io'\n"
+        "import { files } from 'mikser-io'\n"
+        + "import { assets, renderPreset } from 'mikser-io-assets'\n"
         + "import { mcp } from 'mikser-io-mcp'\n"
         + "import { drive } from 'mikser-io-drive'\n"
         + 'export default async () => ({\n'
