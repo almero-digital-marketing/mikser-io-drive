@@ -6,15 +6,17 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 
-// `derived` is a passthrough of what the assets plugin stamped, and it was the
-// one field in the add response I could not verify by unit test: it only exists
-// when a real preset matched and a real derivative was produced. So this runs
-// the whole pipeline — files → assets → renderPreset → sharp — against a live
-// server and asks the tool.
+// `derived` is `entity.meta.presets`, spread onto the add response. What this
+// package owns is that passthrough: the field it reads and the field it
+// writes, over a live server through the real tool.
 //
-// The read is three lines. What this pins is that those three lines name the
-// field the pipeline actually writes, which is the half that silently rots when
-// the plugin changes shape.
+// It used to produce a real derivative to get there — files → assets →
+// renderPreset → sharp — which bought two assertions beyond the passthrough
+// (a .webp suffix, a URL unlike the source) at the price of a hard dependency
+// on mikser-io-assets, a live image encode, and a `skip` whenever sharp was
+// absent, so on many machines it never ran at all. Those two assertions are
+// presetUrl's behaviour and are unit-tested in mikser-io-assets. A five-line
+// plugin stamps the field on the same hook instead.
 //
 // Two mistakes made while building it, both of which produce SILENCE rather
 // than an error and are worth knowing:
@@ -27,15 +29,7 @@ import { createRequire } from 'node:module'
 //     (/media/**) matches nothing, produces no variant, and reports only that
 //     none matched.
 
-// sharp is mikser-io's dependency, not this package's — the fixture needs it
-// because a preset does the actual image work. Resolved from there rather than
-// from here, and the fixture's node_modules is built from mikser-io's so the
-// spawned build finds it too.
-const require_ = createRequire(import.meta.url)
 const ENGINE = path.resolve(import.meta.dirname, '..', '..', 'mikser-io')
-const hasSharp = (() => {
-    try { require_.resolve('sharp', { paths: [ENGINE] }); return true } catch { return false }
-})()
 
 const PORT = 4211
 const PNG = Buffer.from(
@@ -60,10 +54,8 @@ async function rpc(token, method, params, session) {
 }
 
 before(async (t) => {
-    if (!hasSharp) return
     dir = await mkdtemp(path.join(tmpdir(), 'mikser-derived-'))
     await mkdir(path.join(dir, 'media'), { recursive: true })
-    await mkdir(path.join(dir, 'presets'), { recursive: true })
     await mkdir(path.join(dir, 'documents'), { recursive: true })
 
     // node_modules by symlink, so the fixture resolves the working copies.
@@ -82,29 +74,41 @@ before(async (t) => {
         await symlink(path.resolve(here, '..', pkg), path.join(dir, 'node_modules', pkg)).catch(() => {})
     }
 
-    // A preset is a module whose DEFAULT export does the work.
-    await writeFile(path.join(dir, 'presets/web.js'),
-        "import sharp from 'sharp'\n"
-        + 'export const revision = 1\n'
-        + "export const format = 'webp'\n"
-        + 'export const options = { width: 8 }\n'
-        + 'export default ({ entity: { source, destination }, options }) =>\n'
-        + '    sharp(source).resize(options).webp().toFile(destination)\n')
-
     // `match` against the ID shape, which the files plugin builds from the path
     // inside filesFolder — NOT the URL shape.
+    // A five-line plugin in place of the assets pipeline.
+    //
+    // `derived` is `entity.meta.presets`, spread onto the response. What drive
+    // owns is that passthrough — the field name it reads and the field name it
+    // writes. Producing a real derivative to test it meant a live sharp
+    // encode, a preset module on disk, and a hard dependency on
+    // mikser-io-assets for a package that does not otherwise use it; the
+    // assertions it bought beyond the passthrough (a .webp suffix, a URL
+    // unlike the source) are presetUrl's behaviour and are unit-tested in
+    // mikser-io-assets, where changing them would be noticed.
+    //
+    // Stamped in onProcessed, the same hook and the same field the assets
+    // plugin writes.
     await writeFile(path.join(dir, 'mikser.config.js'),
         "import { files } from 'mikser-io'\n"
-        + "import { assets, renderPreset } from 'mikser-io-assets'\n"
         + "import { mcp } from 'mikser-io-mcp'\n"
         + "import { drive } from 'mikser-io-drive'\n"
+        // onProcessed is a PHASE hook — it receives the abort signal, not an
+        // entity — so the stamp walks the journal, which is the same shape and
+        // the same hook the assets plugin uses to write this field.
+        + 'const stampPresets = () => ({ onProcessed, useJournal, updateEntity, constants: { OPERATION } }) =>\n'
+        + '    onProcessed(async (signal) => {\n'
+        + "    for await (const { entity } of useJournal('Stamp presets', [OPERATION.CREATE, OPERATION.UPDATE], signal)) {\n"
+        + "        if (entity.collection !== 'files' || !entity.id.endsWith('.png')) continue\n"
+        + "        entity.meta = { ...entity.meta, presets: { web: '/derived/web/shots/hero.webp' } }\n"
+        + '        await updateEntity(entity)\n'
+        + '    }\n'
+        + '})\n'
         + 'export default async () => ({\n'
         + '    plugins: [\n'
         + "        mcp({ base: '' }),\n"
         + "        files({ filesFolder: 'media', outputFolder: 'media' }),\n"
-        + "        assets({ assetsFolder: 'derived', presetsFolder: 'presets',\n"
-        + "                 presets: { web: { match: ['/files/**/*.png'] } } }),\n"
-        + '        renderPreset(),\n'
+        + '        stampPresets(),\n'
         + "        drive({ allowRemote: true, endpoints: { media: { folder: 'media' } } }),\n"
         + '    ],\n'
         + '})\n')
@@ -145,7 +149,7 @@ after(async () => {
     if (dir) await rm(dir, { recursive: true, force: true })
 })
 
-describe('derived — the preset passthrough', { skip: hasSharp ? false : 'sharp is not installed' }, () => {
+describe('derived — the preset passthrough', () => {
     it('reports the variant a preset actually produced', async () => {
         const session = { id: null, n: 1 }
         await rpc(null, 'initialize',
