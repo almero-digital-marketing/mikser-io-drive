@@ -28,7 +28,7 @@
   },
   "homepage": "https://github.com/almero-digital-marketing/mikser-io-drive#readme",
   "peerDependencies": {
-    "mikser-io": "^10.0.0",
+    "mikser-io": "^10.14.0",
     "zod": "^4.0.0"
   },
   "dependencies": {
@@ -41,7 +41,7 @@
     "bcryptjs": "^3.0.0",
     "express": "^5.2.1",
     "globby": "^15.0.0",
-    "mikser-io": "^10.0.0",
+    "mikser-io": "^10.14.0",
     "mikser-io-auth": "^0.13.0",
     "mikser-io-mcp": "^2.0.0",
     "webdav": "^5.10.0",
