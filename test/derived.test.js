@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 
@@ -69,9 +70,19 @@ before(async (t) => {
             await symlink(path.join(donor, entry), path.join(dir, 'node_modules', entry)).catch(() => {})
         }
     }
+    // Point at the WORKING COPY of each sibling when there is one — the whole
+    // point is to exercise this checkout, not the last release. In CI there is
+    // no workspace: the repository is cloned alone and the siblings come from
+    // npm, already symlinked by the donor loop above. Replacing them there
+    // removed the installed copy and linked to a path that does not exist, so
+    // the fixture had no engine at all and the server never started. Both
+    // steps failed silently — the rm succeeded, the symlink was swallowed by
+    // .catch — which is why it read as "Cannot find module .../app.js".
     for (const pkg of ['mikser-io', 'mikser-io-mcp', 'mikser-io-drive']) {
+        const sibling = path.resolve(here, '..', pkg)
+        if (!existsSync(sibling)) continue
         await rm(path.join(dir, 'node_modules', pkg), { recursive: true, force: true })
-        await symlink(path.resolve(here, '..', pkg), path.join(dir, 'node_modules', pkg)).catch(() => {})
+        await symlink(sibling, path.join(dir, 'node_modules', pkg)).catch(() => {})
     }
 
     // `match` against the ID shape, which the files plugin builds from the path
