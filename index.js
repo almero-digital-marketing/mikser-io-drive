@@ -232,6 +232,9 @@ export function drive(options = {}) {
                     : configured === 0 ? 'disabled by config.server.requestTimeout'
                     : `${configured}ms from config.server.requestTimeout`)
         })
+        // Names this package to the runtime's loaded-plugin record, so
+        // ping reports it as running rather than as undetectable.
+        return { module: import.meta.url }
     }
 }
 
