@@ -27,7 +27,7 @@ before(async () => {
     await writeFile(path.join(dir, 'users.htpasswd'), ['alice', 'bob', 'carol']
         .map(u => `${u}:${bcrypt.hashSync(`${u}-pw`, 10)}`).join('\n') + '\n')
     await writeFile(path.join(dir, 'groups.htgroup'),
-        'editors: alice\nreviewers: bob\n')
+        'editors: alice\nreviewers: bob\nowners: carol\n')
 
     const { default: express } = await import('express')
     const app = express()
@@ -43,6 +43,10 @@ before(async () => {
             // why `editors` has to name `drive:locked` too.
             editors:   ['drive:content', 'drive:content:write', 'drive:locked'],
             reviewers: ['drive:content'],                          // read, no write
+            // `*` is a real wildcard. It was written in grants long before it
+            // meant anything, and matched nothing — every gate was an exact
+            // includes, including the two in this package.
+            owners:    ['*'],
         },
     })
 
@@ -103,10 +107,29 @@ describe('auth', () => {
     })
 
     it('403s an authenticated user who lacks the endpoint capability', async () => {
-        // carol is in no group, so with a capability map configured she holds
-        // nothing — authenticated, but not for this endpoint.
-        const res = await dav('PROPFIND', '/drive/content/', { headers: { depth: '0', ...as('carol') } })
+        // bob is a reviewer: he holds drive:content but was never granted
+        // drive:locked, so that endpoint is not his to open.
+        const res = await dav('PROPFIND', '/drive/locked/', { headers: { depth: '0', ...as('bob') } })
         assert.equal(res.status, 403)
+    })
+
+    it('opens an endpoint for a wildcard holder who was never granted it', async () => {
+        // carol holds `*` and nothing else. The gate here checked
+        // `capabilities.includes(...)` directly rather than asking
+        // hasCapability, so a wildcard reached api and mcp — which declare no
+        // capability and so pass the unscoped check — and stopped at the
+        // drive, which declares one. A role whose summary said "everything"
+        // could not open a folder, and its printed reach was empty.
+        const res = await dav('PROPFIND', '/drive/content/', { headers: { depth: '0', ...as('carol') } })
+        assert.equal(res.status, 207, 'a wildcard holder may mount and read')
+    })
+
+    it('lets a wildcard holder write, without naming the write capability', async () => {
+        const res = await dav('PUT', '/drive/content/wildcard.md', {
+            headers: { ...as('carol'), 'content-type': 'text/markdown' },
+            body: '# by a wildcard holder\n',
+        })
+        assert.ok([201, 204].includes(res.status), `expected a write, got ${res.status}`)
     })
 })
 
