@@ -500,3 +500,84 @@ describe('read capability', () => {
         assert.notEqual(r.isError, true)
     })
 })
+
+// Who may write, decided once in the engine rather than per plugin.
+//
+// Two bugs lived here, and both were invisible because nothing exercised the
+// tool surface against a credential the WebDAV mount would have judged
+// differently.
+//
+// The first: `holds` was a private `capabilities.includes(...)`, so the `*`
+// wildcard reached the mount — which asks the engine — and stopped at these
+// tools. One endpoint, two surfaces, opposite answers.
+//
+// The second: writing checked only `drive:<name>:write`, while the mount has
+// always required `drive:<name>` to reach the endpoint at all. "may ALSO
+// write" makes the base a prerequisite, not an alternative — so a grant
+// carrying `:write` alone was refused a PUT and allowed the identical write
+// through the tool. That is not a hypothetical configuration; it is what a
+// deployment has when its editors hold `drive:documents:write` and nothing
+// carries `drive:documents`.
+describe('writing is gated the way the mount gates it', () => {
+    const write = (substrate, name) => substrate.call('mikser_drive_add', {
+        endpoint: 'media', files: [{ name, base64: b64('x') }],
+    })
+    const refusal = (r) => r?.content?.find(c => c.type === 'text')?.text ?? JSON.stringify(r)
+
+    const toolsAs = async (capabilities) => {
+        const substrate = fakeSubstrate({ subject: 'u', roles: [], capabilities })
+        resetServices()
+        provideService('mcp', substrate)
+        registerFileTools({
+            runtime: { options: { ...runtime.options }, refs: runtime.refs },
+            endpoints: { media: { folder: 'media' } },
+            capabilityOf: readCapability, writeCapabilityOf: writeCapability,
+        })
+        return substrate
+    }
+
+    it('lets a wildcard holder write, as the mount already did', async () => {
+        const substrate = await toolsAs(['*'])
+        const r = await write(substrate, 'wildcard.txt')
+        assert.doesNotMatch(refusal(r), /do not hold/, refusal(r))
+    })
+
+    it('refuses `:write` held without the base, and names the base', async () => {
+        const substrate = await toolsAs(['drive:media:write'])
+        const r = await write(substrate, 'half.txt')
+        assert.match(refusal(r), /do not hold drive:media\b/,
+            'the missing capability is the base, and the refusal must say which')
+        assert.doesNotMatch(refusal(r), /drive:media:write/,
+            'naming the one they DO hold sends them to fix the wrong grant')
+    })
+
+    it('allows the pair, which is what the mount requires', async () => {
+        const substrate = await toolsAs(['drive:media', 'drive:media:write'])
+        const r = await write(substrate, 'both.txt')
+        assert.doesNotMatch(refusal(r), /do not hold/, refusal(r))
+    })
+
+    it('still refuses a reader', async () => {
+        const substrate = await toolsAs(['drive:media'])
+        assert.match(refusal(await write(substrate, 'reader.txt')), /do not hold drive:media:write/)
+    })
+
+    it('lets a wildcard holder READ, which is the other gate', async () => {
+        // The read tool asks `holds`; writing asks the engine's
+        // missingCapability. They are different call paths, and a test that
+        // only writes leaves the read gate uncovered — which is how a private
+        // `includes` survived there while the mount had already been fixed.
+        const seeded = await toolsAs(['drive:media', 'drive:media:write'])
+        await write(seeded, 'readable-by-wildcard.txt')
+        const substrate = await toolsAs(['*'])
+        const r = await substrate.call('mikser_drive_read', { path: 'media/readable-by-wildcard.txt' })
+        assert.doesNotMatch(refusal(r), /lacks|do not hold/, refusal(r))
+    })
+
+    it('leaves an unscoped credential alone', async () => {
+        // A bare static token declares nothing; the endpoint's own gate is
+        // what bounds it. That is a different rule and stays different.
+        const substrate = await toolsAs(null)
+        assert.doesNotMatch(refusal(await write(substrate, 'token.txt')), /do not hold/)
+    })
+})
