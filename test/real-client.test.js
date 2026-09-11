@@ -67,6 +67,19 @@ before(async () => {
 })
 
 after(async () => {
+    // Destroy the sockets before closing, or the close never settles.
+    //
+    // `server.close()` waits for every connection to end, and these suites
+    // leave some that never will: fetch() pools keep-alives, and the
+    // interrupted-upload cases abort a request mid-body on purpose. The file's
+    // tests would all pass and the FILE would hang — "Promise resolution is
+    // still pending but the event loop has already resolved" — which in CI is
+    // a job that stops reporting and, before the 15-minute cap, ran until
+    // GitHub's own. It blocked two of today's releases.
+    //
+    // Reproducible with `--test-concurrency=2` (a CI runner's shape; a 16-core
+    // box hides it), and gone with this.
+    server?.closeAllConnections?.()
     await new Promise(r => server?.close(r))
     await rm(dir, { recursive: true, force: true })
 })
