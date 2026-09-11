@@ -172,6 +172,35 @@ export function drive(options = {}) {
                     locks:      ep.locks      ?? locks,
                 })
 
+                // Do not let a client cache the DISCOVERY answer for a week.
+                //
+                // @nephele/adapter-file-system returns a flat
+                // `max-age=604800` here, and this header rides the OPTIONS
+                // response — which for WebDAV is not a preflight but the
+                // answer to "is this a share at all, and what can I do with
+                // it". Caching that for seven days has two edges, and both
+                // were met in practice:
+                //
+                // A client that asked BEFORE the endpoint worked keeps its
+                // refusal. Every install that someone tried and failed to map
+                // before the CORS fix in 11.0.4 would go on failing after
+                // upgrading, for up to a week, with the server answering
+                // correctly and Windows reporting 0x80070043 — nothing in any
+                // log on either side, and `Restart-Service WebClient -Force`
+                // the only way out. That is not a remedy anyone guesses.
+                //
+                // And the capabilities here are CONFIGURATION. Flipping
+                // `readOnly` changes both the compliance classes and the Allow
+                // list, so a week-long cache lets a client keep acting on a
+                // shape the mount no longer has.
+                //
+                // `no-cache` costs one cheap request per client session and
+                // buys the ability to change a mount and be believed. Set on
+                // the instance rather than by subclassing because
+                // withStagedWrites proxies through `Reflect.get`, so an own
+                // property is found and bound on either path.
+                fsAdapter.getOptionsResponseCacheControl = async () => 'no-cache'
+
                 app.use(mountPath, nepheleServer({
                     // Writes are staged to a sibling temp file and renamed.
                     // The adapter writes straight to the destination with
@@ -221,6 +250,14 @@ export function drive(options = {}) {
                     // Allow list including LOCK when class 2 is present. This
                     // list is what CORS advertises to browsers; the response
                     // Windows reads comes from nephele.
+                    // Only the ENDPOINT path is a share. `OPTIONS /drive`
+                    // and `OPTIONS /` answer a plain CORS 204 with no `DAV:`
+                    // header, and that is right: there is no resource at the
+                    // base path — one Nephele server per endpoint, no virtual
+                    // root — so `PROPFIND /drive/` is a 404 by design and the
+                    // site root is a static site, not a share. Written down
+                    // because those 204s look exactly like the bug fixed in
+                    // 11.0.4 and are not it.
                     methods: [
                         'OPTIONS', 'GET', 'HEAD', 'POST', 'PROPFIND',
                         ...(readOnly ? [] : [

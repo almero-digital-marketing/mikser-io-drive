@@ -149,6 +149,42 @@ creates an empty file** (RFC 4918 §9.10.4). A client that locks before writing
 — Finder's Save As does — leaves an empty document behind even if the write
 never arrives.
 
+## When a client refuses and the server is right
+
+WebDAV clients cache their **discovery** verdict — not the file listing, the
+answer to "is this a WebDAV share at all". Fix the server and the client can go
+on refusing, with nothing wrong at either end and nothing in any log to say so.
+
+This endpoint answers `Cache-Control: no-cache` on `OPTIONS` so its own answer
+is never the stale one. The client's memory of a PREVIOUS answer is not
+something the server can reach, and flushing it is not guessable:
+
+| | |
+| --- | --- |
+| Windows | `Restart-Service WebClient -Force` (elevated) |
+| macOS | unmount and remount; Finder caches per session |
+| Linux | `gio mount -u <url>`, or restart `gvfs-dav` |
+
+Windows is the one that bites, because the Microsoft redirector decides from the
+`DAV:` header whether a URL is a share at all, and reports a cached refusal as
+`0x80070043` — "The network name cannot be found". It fails *before* prompting
+for credentials, so it reads as a broken URL rather than a cached verdict. An
+afternoon was lost to exactly that: `curl` verified the server correct while
+Explorer kept refusing.
+
+The default adapter advertises `max-age=604800` here. Seven days is a strange
+thing to promise about capabilities that are configuration — flipping
+`readOnly` changes both the compliance classes and the `Allow` list — so this
+plugin overrides it. One cheap request per client session buys the ability to
+change a mount and be believed.
+
+**`OPTIONS /drive` and `OPTIONS /` answer a plain CORS 204 with no `DAV:`
+header, and that is correct.** There is no resource at the base path: one
+Nephele server per endpoint, no virtual root, so `PROPFIND /drive/` is a 404 by
+design and the site root is a static site, not a share. Only
+`/drive/<endpoint>/` is a share. Noted because those 204s look like the bug
+fixed in 11.0.4 and are not.
+
 ## litmus compliance
 
 Scored with [litmus](https://github.com/tolsen/litmus) 0.13, the WebDAV

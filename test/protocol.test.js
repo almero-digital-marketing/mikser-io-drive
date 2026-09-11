@@ -35,6 +35,7 @@ before(async () => {
             emulated: { folder: 'documents' },                                        // the default
             strict:   { folder: 'documents', properties: 'disallow', locks: 'disallow' },
             meta:     { folder: 'documents', properties: 'meta-files', locks: 'meta-files' },
+            readonly: { folder: 'documents', readOnly: true },                        // shape is config
         },
         auth: identity,
     })
@@ -68,6 +69,33 @@ const lock = (ep, file = 'page.md') => fetch(`http://127.0.0.1:${port}/drive/${e
     body: `<?xml version="1.0" encoding="utf-8"?>
 <D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype>
 <D:owner><D:href>test</D:href></D:owner></D:lockinfo>`,
+})
+
+describe('the discovery answer must not be cached for a week', () => {
+    // OPTIONS is where WebDAV DISCOVERY lives — the answer to "is this a share
+    // at all, and what can I do with it" — and the file-system adapter returns
+    // a flat `max-age=604800` for it.
+    //
+    // Both edges of that were met in practice. A client that asked before the
+    // endpoint worked keeps its refusal: installs that failed to map before the
+    // CORS fix in 11.0.4 went on failing after upgrading, with the server
+    // answering correctly, Windows reporting 0x80070043, nothing in any log on
+    // either side, and `Restart-Service WebClient -Force` the only way out. And
+    // the capabilities here are CONFIGURATION — flipping `readOnly` changes the
+    // compliance classes and the Allow list, so a week-long cache lets a client
+    // act on a shape the mount no longer has.
+    it('answers no-cache, so a changed mount is believed', async () => {
+        const res = await options('emulated')
+        const cacheControl = res.headers.get('cache-control') ?? ''
+        assert.doesNotMatch(cacheControl, /max-age=(?!0\b)\d+/,
+            `OPTIONS must not advertise a positive max-age — got "${cacheControl}"`)
+        assert.match(cacheControl, /no-cache/, `cache-control: ${cacheControl}`)
+    })
+
+    it('holds for a read-only mount too, whose shape is just as configurable', async () => {
+        const res = await options('readonly')
+        assert.match(res.headers.get('cache-control') ?? '', /no-cache/)
+    })
 })
 
 describe('DAV compliance class — what decides whether Finder will mount', () => {
