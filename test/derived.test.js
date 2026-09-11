@@ -156,7 +156,27 @@ before(async (t) => {
 })
 
 after(async () => {
-    server?.kill()
+    // WAIT for it to die, and escalate. `kill()` only sends the signal; the
+    // child's stdout/stderr are pipes we hold, so until it actually exits
+    // those handles keep THIS process alive and the run never ends. Every
+    // test passes and then node sits there — on CI that was fifteen minutes
+    // of nothing, ended by the job timeout and "Terminate orphan process".
+    //
+    // mikser handles SIGTERM itself (instance.js: close(); process.exit(0)),
+    // so the graceful path is the normal one; SIGKILL is the floor for when
+    // close() does not come back.
+    if (server && server.exitCode === null && server.signalCode === null) {
+        const exited = new Promise(resolve => server.once('exit', resolve))
+        server.kill()
+        const inTime = await Promise.race([
+            exited.then(() => true),
+            new Promise(resolve => setTimeout(() => resolve(false), 5000)),
+        ])
+        if (!inTime) {
+            server.kill('SIGKILL')
+            await exited
+        }
+    }
     if (dir) await rm(dir, { recursive: true, force: true })
 })
 
