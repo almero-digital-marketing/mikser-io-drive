@@ -202,6 +202,32 @@ export function drive(options = {}) {
                     // WebDAV GET/PUT stream file bodies, so a facade must not
                     // buffer this route.
                     streaming:    true,
+                    // The verbs a DAV mount serves, and OPTIONS is the one
+                    // that matters most.
+                    //
+                    // Listing it tells the engine this mount answers OPTIONS
+                    // ITSELF, so the global CORS preflight steps aside
+                    // (mikser-io 11.5.0+). It used to end every OPTIONS in the
+                    // process with a 204 carrying no `DAV:` header and five
+                    // REST verbs — and the Microsoft WebDAV redirector decides
+                    // whether a URL is a share AT ALL from that header, so
+                    // Explorer reported "The network name cannot be found"
+                    // (0x80070043) and never reached the credential prompt.
+                    // Finder, curl, Cyberduck and gvfs never noticed, because
+                    // none of them gate on it.
+                    //
+                    // Nephele's own OPTIONS builds the real answer — `DAV:`
+                    // with the compliance classes its adapter reports, and an
+                    // Allow list including LOCK when class 2 is present. This
+                    // list is what CORS advertises to browsers; the response
+                    // Windows reads comes from nephele.
+                    methods: [
+                        'OPTIONS', 'GET', 'HEAD', 'POST', 'PROPFIND',
+                        ...(readOnly ? [] : [
+                            'PUT', 'DELETE', 'COPY', 'MOVE', 'MKCOL',
+                            'PROPPATCH', 'LOCK', 'UNLOCK',
+                        ]),
+                    ],
                     label:        'WebDAV',
                     detail:       `(${ep.folder}${readOnly ? ', read-only' : ''})`,
                     authLabel:    verifier ? (verifier.name ?? 'auth')
