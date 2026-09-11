@@ -173,10 +173,15 @@ afternoon was lost to exactly that: `curl` verified the server correct while
 Explorer kept refusing.
 
 The default adapter advertises `max-age=604800` here. Seven days is a strange
-thing to promise about capabilities that are configuration — flipping
-`readOnly` changes both the compliance classes and the `Allow` list — so this
-plugin overrides it. One cheap request per client session buys the ability to
-change a mount and be believed.
+thing to promise about capabilities that are configuration: `locks: 'disallow'`
+drops class 2 and `LOCK` from `Allow`, and a client can keep acting on the old
+answer for a week. So this plugin overrides it. One cheap request per client
+session buys the ability to change a mount and be believed.
+
+`readOnly` is **not** an example of that, though it reads like one: measured, a
+read-only mount reports the same `DAV: 1, 3, 2` and the same `Allow` list as a
+writable one — PUT and DELETE included — and refuses the write when it arrives.
+nephele's read-only plugin gates requests, not the discovery response.
 
 **`OPTIONS /drive` and `OPTIONS /` answer a plain CORS 204 with no `DAV:`
 header, and that is correct.** There is no resource at the base path: one

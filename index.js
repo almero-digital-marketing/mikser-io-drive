@@ -189,10 +189,15 @@ export function drive(options = {}) {
                 // log on either side, and `Restart-Service WebClient -Force`
                 // the only way out. That is not a remedy anyone guesses.
                 //
-                // And the capabilities here are CONFIGURATION. Flipping
-                // `readOnly` changes both the compliance classes and the Allow
-                // list, so a week-long cache lets a client keep acting on a
-                // shape the mount no longer has.
+                // And the capabilities here are CONFIGURATION.
+                // `locks: 'disallow'` drops class 2 and LOCK from the Allow
+                // list — see test/protocol.test.js — so a week-long cache lets
+                // a client keep acting on a shape the mount no longer has.
+                //
+                // NOT `readOnly`, which was the example first given here and
+                // is wrong: measured, a read-only mount reports the same
+                // classes and the same Allow list as a writable one, and
+                // refuses the write per request instead.
                 //
                 // `no-cache` costs one cheap request per client session and
                 // buys the ability to change a mount and be believed. Set on
@@ -250,6 +255,24 @@ export function drive(options = {}) {
                     // Allow list including LOCK when class 2 is present. This
                     // list is what CORS advertises to browsers; the response
                     // Windows reads comes from nephele.
+                    // No CORS headers on a DAV mount.
+                    //
+                    // They were inherited from the global default, which
+                    // answers `access-control-allow-origin: *` — a claim about
+                    // who may read this endpoint from a web page, made on an
+                    // AUTHENTICATED mount, by nobody in particular. It is not
+                    // an exposure today: the engine never configures
+                    // `credentials: true`, so no browser attaches the Basic
+                    // credentials cross-origin. It is a claim with no
+                    // beneficiary either — this mount's clients are OS WebDAV
+                    // redirectors, CLI tools and curl, none of which consult
+                    // CORS at all.
+                    //
+                    // So it is stated rather than inherited. A project that
+                    // genuinely wants a browser-side DAV client can put the
+                    // endpoint behind its own app.
+                    cors: false,
+
                     // Only the ENDPOINT path is a share. `OPTIONS /drive`
                     // and `OPTIONS /` answer a plain CORS 204 with no `DAV:`
                     // header, and that is right: there is no resource at the
