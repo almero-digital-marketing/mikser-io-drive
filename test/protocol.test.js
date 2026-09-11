@@ -263,3 +263,58 @@ describe('known nephele non-compliance, pinned', () => {
         assert.equal(res.status, 500, 'if this becomes 400, nephele fixed it')
     })
 })
+
+describe('the mount answers to its own name', () => {
+    // A client labels the folder from `displayname`, and
+    // @nephele/adapter-file-system does not implement it — the name is
+    // commented out of its live-property list with a TODO — so a PROPFIND for
+    // it answered 404 and the client fell back to guessing from the URL.
+    //
+    // Guessing is not controllable: Express matches routes case-insensitively,
+    // so `/drive/SkinCheck` and `/drive/skincheck` reach the same mount and the
+    // casing shown is whichever the client asked for first. An endpoint renamed
+    // to `SkinCheck` went on reading `skincheck` in Explorer.
+    const propfind = (ep, body) => fetch(`http://127.0.0.1:${port}/drive/${ep}/`, {
+        method: 'PROPFIND',
+        headers: { authorization: AUTH, 'content-type': 'text/xml', depth: '0' },
+        body,
+    })
+    const NAMED = '<propfind xmlns="DAV:"><prop><displayname/></prop></propfind>'
+    const ALLPROP = '<propfind xmlns="DAV:"><allprop/></propfind>'
+
+    it('reports the endpoint key as displayname, asked for by name', async () => {
+        const res = await propfind('emulated', NAMED)
+        const xml = await res.text()
+        assert.equal(res.status, 207, xml)
+        assert.match(xml, /<[^>]*displayname[^>]*>emulated</,
+            `displayname must carry the endpoint key — got:\n${xml}`)
+        assert.doesNotMatch(xml, /displayname property was not found/, xml)
+    })
+
+    it('includes it in allprop, which is how a client usually asks', async () => {
+        // PROPFIND reaches properties through the BY-USER variants, and the
+        // adapter's delegate to the plain ones on `this` — so a decorator that
+        // wrapped only the plain three would be read straight past. This is the
+        // case that catches that.
+        const xml = await (await propfind('emulated', ALLPROP)).text()
+        assert.match(xml, /<[^>]*displayname[^>]*>emulated</, `allprop must include it — got:\n${xml}`)
+    })
+
+    it('names each endpoint separately, since each is its own mount', async () => {
+        const xml = await (await propfind('readonly', NAMED)).text()
+        assert.match(xml, /<[^>]*displayname[^>]*>readonly</, xml)
+    })
+
+    it('leaves the files inside it alone', async () => {
+        // Only the mount ROOT is named in config. Everything below is a real
+        // file whose name the client reads from the path.
+        const res = await fetch(`http://127.0.0.1:${port}/drive/emulated/page.md`, {
+            method: 'PROPFIND',
+            headers: { authorization: AUTH, 'content-type': 'text/xml', depth: '0' },
+            body: NAMED,
+        })
+        const xml = await res.text()
+        assert.doesNotMatch(xml, /<[^>]*displayname[^>]*>emulated</,
+            `a file must not inherit the mount's name — got:\n${xml}`)
+    })
+})

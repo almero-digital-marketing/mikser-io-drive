@@ -149,6 +149,37 @@ creates an empty file** (RFC 4918 §9.10.4). A client that locks before writing
 — Finder's Save As does — leaves an empty document behind even if the write
 never arrives.
 
+## What the folder is called
+
+The endpoint key is the name, and the mount reports it as `displayname`:
+
+```js
+drive({
+    endpoints: {
+        SkinCheck:  { folder: 'skincheck' },              // shows as "SkinCheck"
+        reports:    { folder: 'data', displayName: 'Q3 reports' },
+    },
+})
+```
+
+Without it the label is whatever the client derives from the URL, and that is
+not controllable: Express matches routes case-insensitively, so
+`/drive/SkinCheck` and `/drive/skincheck` reach the same mount and the casing
+shown is whichever the client asked for first — an endpoint renamed to
+`SkinCheck` kept reading `skincheck` in Explorer, and remapping did not change
+it. `@nephele/adapter-file-system` does not implement `displayname` (it is
+commented out of its live-property list with a TODO), so a PROPFIND for it
+answered `404 The displayname property was not found` and the client had nothing
+to go on.
+
+The default is the **key**, not `summary`: `displayname` is a name — RFC 4918
+§15.2, "suitable for presentation to a user" — and the key is already the URL
+segment and what the mount log prints. `summary` is a sentence and reads badly
+as a folder label. `displayName` overrides the key where it is not presentable.
+
+Only the mount root is named. Everything below it is a real file or directory
+whose name the client reads from the path.
+
 ## When a client refuses and the server is right
 
 WebDAV clients cache their **discovery** verdict — not the file listing, the

@@ -4,6 +4,7 @@ import { registerRoute, resolveAuth, reachabilityOf, registerJunk, registerCapab
 import { MikserAuthenticator } from './lib/authenticator.js'
 import { registerFileTools } from './lib/files.js'
 import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
+import { withDisplayName } from './lib/display-name.js'
 
 export { MikserAuthenticator, withStagedWrites, stageWrites }
 
@@ -43,6 +44,8 @@ export const writeCapability = (name) => `drive:${name}:write`
  *             content: { folder: 'documents' },
  *             media:   { folder: 'files/media' },
  *             data:    { folder: 'data', readOnly: true },
+ *             Reports: { folder: 'reports' },            // shows as "Reports"
+ *             q3:      { folder: 'q3', displayName: 'Q3 reports' },
  *         },
  *         auth: identity,
  *     })
@@ -213,13 +216,33 @@ export function drive(options = {}) {
                     // watcher can import a half-written file, and an
                     // interrupted overwrite leaves the ORIGINAL destroyed.
                     // Both measured; see lib/staged-writes.js.
-                    adapter: (ep.atomicWrites === false)
-                        ? fsAdapter
-                        : withStagedWrites(fsAdapter, {
-                            onFailure: (err, file) => logger.warn(
-                                'drive: upload of %s failed, original left intact — %s',
-                                path.basename(file), err.message),
-                        }),
+                    // The mount answers to its own name.
+                    //
+                    // `displayname` is what a client labels the folder with,
+                    // and the adapter does not implement it — so the label was
+                    // whatever each client derived from the URL, which is not
+                    // controllable: Express matches routes case-insensitively,
+                    // so an endpoint renamed to `SkinCheck` went on reading
+                    // `skincheck` in Explorer, from a casing the client had
+                    // cached.
+                    //
+                    // Defaults to the endpoint KEY rather than `summary`.
+                    // displayname is a NAME — RFC 4918 §15.2, "suitable for
+                    // presentation to a user" — and the key is already the URL
+                    // segment and the mount log label, so nothing new has to
+                    // be written down. `summary` is a sentence, which reads
+                    // badly as a folder label. `displayName` overrides it for
+                    // a key that is not presentable.
+                    adapter: withDisplayName(
+                        (ep.atomicWrites === false)
+                            ? fsAdapter
+                            : withStagedWrites(fsAdapter, {
+                                onFailure: (err, file) => logger.warn(
+                                    'drive: upload of %s failed, original left intact — %s',
+                                    path.basename(file), err.message),
+                            }),
+                        ep.displayName ?? name,
+                    ),
                     authenticator,
                     // `readOnly: true` is a hard cap — "nobody writes here",
                     // which is a different statement from "you may not write
