@@ -113,6 +113,32 @@ after(async () => {
     await rm(dir, { recursive: true, force: true })
 })
 
+describe('host in the wrong place', () => {
+    // It was per-endpoint while this was being designed, and moved to the
+    // plugin when the root listing arrived — several endpoints share one
+    // domain, and `/` on it lists them. This file's own JSDoc went on showing
+    // the old shape, which is a config that reads as though it works and does
+    // nothing at all. So it says so.
+    it('warns instead of silently ignoring it', async () => {
+        const said = []
+        const core = {
+            runtime,
+            onLoad:    () => {},
+            onLoaded:  (cb) => said.push(cb),
+            useLogger: () => ({
+                info(){}, error(){}, debug(){}, trace(){},
+                warn: (...args) => said.push(args.join(' ')),
+            }),
+        }
+        drive({ endpoints: { Share: { folder: 'documents', host: 'drive.example.test' } } })(core)
+        for (const entry of [...said]) if (typeof entry === 'function') await entry()
+
+        const warning = said.find(entry =>
+            typeof entry === 'string' && entry.includes('plugin-level option'))
+        assert.ok(warning, `no warning about a misplaced host:\n${said.filter(e => typeof e === 'string').join('\n')}`)
+    })
+})
+
 describe('the drive root on its own host', () => {
     it('announces itself as WebDAV, which is what the redirector asks first', async () => {
         // Answered without credentials on purpose: this is discovery, and it

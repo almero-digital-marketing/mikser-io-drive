@@ -47,9 +47,12 @@ export const writeCapability = (name) => `drive:${name}:write`
  *             data:    { folder: 'data', readOnly: true },
  *             Reports: { folder: 'reports' },            // shows as "Reports"
  *             q3:      { folder: 'q3', displayName: 'Q3 reports' },
- *             share:   { folder: 'share', host: 'drive.example.com' },
  *         },
  *         auth: identity,
+ *         // A domain of its own, where `/` lists the endpoints the caller
+ *         // may read. Belongs to the DRIVE, not to one endpoint: the whole
+ *         // point is that several endpoints share it.
+ *         host: 'drive.example.com',
  *     })
  *
  * One Nephele server per endpoint, mounted at `<base>/<name>` — the same
@@ -144,6 +147,18 @@ export function drive(options = {}) {
             for (const [name, ep] of Object.entries(endpoints)) {
                 if (!ep.folder) {
                     throw new Error(`drive: endpoint ${JSON.stringify(name)} declares no folder`)
+                }
+                // `host` belongs to the drive, not to an endpoint — several
+                // endpoints share one domain, and `/` on it lists them. Said
+                // out loud because the alternative is a config that reads as
+                // though it works and does nothing: this option was
+                // per-endpoint while it was being designed, and the example in
+                // this file's own JSDoc showed it that way after it moved.
+                if (ep.host) {
+                    logger.warn(
+                        'drive: endpoint %j sets `host`, which is a plugin-level option and is ignored here. '
+                        + 'Move it beside `endpoints`: drive({ host: %j, endpoints: { … } }).',
+                        name, ep.host)
                 }
                 const root = resolve(ep.folder)
                 const mountPath = `${base}/${name}`
