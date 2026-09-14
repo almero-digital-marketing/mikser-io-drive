@@ -142,19 +142,61 @@ describe('DAV compliance class — what decides whether Finder will mount', () =
         }
     })
 
-    it("but 'emulate' returns an EMPTY lockdiscovery body where 'meta-files' returns the lock", async () => {
-        // RFC 4918 puts the activelock in the body. Clients read the header,
-        // so this is survivable — but a client that parses the body for the
-        // token finds nothing, and that is the cost of a clean folder.
-        const emulated = await (await lock('emulated', 'body-emulated.md')).text()
-        assert.match(emulated, /<lockdiscovery\s*\/>/)
+    it('every mode that advertises class 2 returns a real activelock, and reports it again', async () => {
+        // RFC 4918 §9.10.1 puts the activelock in the LOCK body, and the
+        // Microsoft WebDAV redirector needs it. Without it Windows cannot
+        // WRITE to the drive at all: it PUTs an empty file, LOCKs it,
+        // PROPFINDs it, finds no lock, and loops until it gives up with
+        // ERROR_INVALID_PARAMETER — so the share lists and reads perfectly
+        // while every save fails with "The parameter is incorrect" and leaves
+        // a zero-byte file behind.
+        //
+        // `emulate` used to answer an empty <lockdiscovery/>, because it
+        // stored no lock at all — the token in the header was the only trace
+        // the lock had ever existed. It keeps them in memory now.
+        //
+        // Asserted for EVERY mode that claims class 2 in OPTIONS, because
+        // claiming it is the promise this checks. A status-only assertion is
+        // what let the gap ship.
+        for (const ep of ['emulated', 'meta']) {
+            const res = await lock(ep, `activelock-${ep}.md`)
+            const body = await res.text()
+            const token = res.headers.get('lock-token')
 
-        const meta = await (await lock('meta', 'body-meta.md')).text()
-        assert.match(meta, /<activelock>/)
+            assert.match(body, /<activelock>/, `${ep}: no activelock in the LOCK body\n${body}`)
+            assert.match(body, /<locktoken>/, `${ep}: no locktoken\n${body}`)
+            // The token in the body must BE the token in the header. A body
+            // carrying a different one is worse than an empty body.
+            const inBody = body.match(/<locktoken>\s*<href>([^<]+)<\/href>/)?.[1]
+            assert.equal(`<${inBody}>`, token, `${ep}: body token and header disagree\n${body}`)
+
+            // And it has to be discoverable afterwards, which is the half a
+            // client uses to find out whether its own lock still holds.
+            const found = await fetch(`http://127.0.0.1:${port}/drive/${ep}/activelock-${ep}.md`, {
+                method: 'PROPFIND',
+                headers: { authorization: AUTH, 'content-type': 'text/xml', depth: '0' },
+                body: '<?xml version="1.0"?><propfind xmlns="DAV:"><prop><lockdiscovery/></prop></propfind>',
+            })
+            const discovered = await found.text()
+            assert.match(discovered, /<activelock>/,
+                `${ep}: PROPFIND does not report the lock\n${discovered}`)
+            assert.ok(discovered.includes(inBody),
+                `${ep}: PROPFIND reports a different token\n${discovered}`)
+        }
     })
 })
 
 describe('a persisted lock is honoured', () => {
+    it("'emulate' refuses a second LOCK too, which is what makes it real", async () => {
+        // The other half of storing locks. A mode that hands out a token to
+        // anyone who asks is a polite fiction; refusing the second caller is
+        // what a client is relying on when it takes one.
+        const first = await lock('emulated', 'contended-emulated.md')
+        assert.ok([200, 201].includes(first.status), `first lock: ${first.status}`)
+        const second = await lock('emulated', 'contended-emulated.md')
+        assert.equal(second.status, 423, `a held resource must answer 423 Locked, got ${second.status}`)
+    })
+
     it('a second LOCK on an already-locked resource is refused', async () => {
         // Only meaningful where locks are persisted. Worth asserting because
         // it is what makes 'meta-files' a real locking implementation rather

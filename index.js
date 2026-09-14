@@ -6,6 +6,7 @@ import { registerFileTools } from './lib/files.js'
 import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
 import { withDisplayName } from './lib/display-name.js'
 import { rootListing } from './lib/root-listing.js'
+import { withEmulatedLockStore } from './lib/emulated-locks.js'
 
 export { MikserAuthenticator, withStagedWrites, stageWrites }
 
@@ -93,12 +94,29 @@ export function drive(options = {}) {
         // browse and commit should not fill up with page.md.nephelemeta
         // files.
         //
-        // The cost is measurable and small: 'emulate' returns a valid
-        // Lock-Token header but an EMPTY <lockdiscovery/> body, where
-        // 'meta-files' returns the full <activelock>. Clients read the
-        // header; one that parses the body for the token would not find it.
-        // Choose 'meta-files' if you need real dead properties or real
-        // locks, and accept the sidecars.
+        // `locks: 'emulate'` is a real locking implementation now — see
+        // lib/emulated-locks.js. It stored nothing until 11.4.0, answering an
+        // empty <lockdiscovery/>, and the comment here called that cost
+        // "measurable and small", affecting "a client that parses the body for
+        // the token". That client is the Windows WebDAV redirector, and the
+        // cost was that the drive could not be WRITTEN to from Explorer at
+        // all: every save failed with "The parameter is incorrect" and left a
+        // zero-byte file. Listing and reading worked, which is what made it
+        // look like a permissions problem for weeks.
+        //
+        // `properties: 'emulate'` still reports success for a PROPPATCH and
+        // stores nothing — measured: 207 back, and the property is gone on the
+        // next PROPFIND. That is deliberate where the lock case was not.
+        // Locks carry timeouts, so keeping them in memory loses nothing a
+        // client does not already handle; dead properties are meant to
+        // persist, and an in-memory store would lose them on restart while a
+        // same-session read made them look durable. Not storing is the honest
+        // answer; 'meta-files' is the one that stores them.
+        //
+        // What Windows PROPPATCHes after a write is its Win32 timestamps, so
+        // on 'emulate' a file keeps the server's mtime rather than the
+        // client's. It does not block the write — the PUT is already done by
+        // then.
         //
         // Do NOT choose 'disallow' if macOS clients matter: it drops DAV
         // compliance class 2 from the OPTIONS response, and Finder refuses a
@@ -267,13 +285,14 @@ export function drive(options = {}) {
                     // badly as a folder label. `displayName` overrides it for
                     // a key that is not presentable.
                     adapter: withDisplayName(
-                        (ep.atomicWrites === false)
-                            ? fsAdapter
-                            : withStagedWrites(fsAdapter, {
-                                onFailure: (err, file) => logger.warn(
-                                    'drive: upload of %s failed, original left intact — %s',
-                                    path.basename(file), err.message),
-                            }),
+                        withEmulatedLockStore(
+                            (ep.atomicWrites === false)
+                                ? fsAdapter
+                                : withStagedWrites(fsAdapter, {
+                                    onFailure: (err, file) => logger.warn(
+                                        'drive: upload of %s failed, original left intact — %s',
+                                        path.basename(file), err.message),
+                                })),
                         ep.displayName ?? name,
                     ),
                     authenticator,
