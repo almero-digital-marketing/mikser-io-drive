@@ -353,6 +353,45 @@ class of problem from Nephele's four known gaps, and it carries 65 open issues
 against Nephele's zero. Nephele is also Apache-2.0 and load-bearing for its
 author's own product, which is the maintenance signal that matters most.
 
+**Writing it here was considered and is not close.** RFC 4918 is about 4,650
+lines in Nephele — 2,994 of method handlers and 1,662 of machinery — and the
+weight is not where it looks:
+
+| | lines | |
+| --- | --- | --- |
+| `Method.js` | 930 | the base class every method inherits |
+| — `checkIfHeader` | 234 | the `If:` header alone |
+| — `checkConditionalHeaders` | 77 | |
+| `LOCK` + `UNLOCK` | 442 | plus 81 lock references threaded through `Method.js` |
+| `MOVE` + `COPY` | 438 | `Depth` and `Overwrite` semantics |
+| `PROPFIND` | 276 | |
+| `GET`/`HEAD` | 286 | ranges, etags |
+
+Listing files is the cheap part. `If:` is a grammar rather than a value —
+tagged and untagged lists, `Not`, lock tokens and etags mixed, evaluated
+against resources other than the request target — and getting it wrong means
+Finder's Save As either walks over somebody's lock or refuses forever. Locking
+is not isolated in `LOCK.js` either: provisional locks, timeouts, per-user lock
+permission and token extraction run on every write method.
+
+And the litmus column above is what would be given up: 95 of 104 on
+`meta-files`, with four known gaps named and pinned. A hand-written server
+starts at zero and earns each point by a client breaking in someone's hands.
+
+The read-only case is genuinely different — `OPTIONS` + `PROPFIND` + `GET` with
+no locking and no conditionals is a few hundred lines, and the drive root in
+`lib/root-listing.js` is already that shape. It is not the case anyone is
+asking for.
+
+**The sharper version of the question is the ADAPTER, not the engine.** Three
+things have been worked around here, and all three are in
+`@nephele/adapter-file-system` rather than in the protocol: `displayname`
+commented out of its live-property list with a TODO, a flat `max-age=604800` on
+the OPTIONS response, and a read-only mount advertising `PUT` in `Allow`. The
+adapter answers "what is at this path and what are its properties", which is
+the thin half. If it keeps costing, replace it and keep the 4,650 lines that
+matter.
+
 Staying on Nephele. If its gaps ever become the binding constraint, the
 serious alternative is not another npm package — it is **Apache `mod_dav`**,
 the implementation litmus was written to test, which reads `htpasswd` and
