@@ -5,6 +5,7 @@ import { MikserAuthenticator } from './lib/authenticator.js'
 import { registerFileTools } from './lib/files.js'
 import { withStagedWrites, stageWrites } from './lib/staged-writes.js'
 import { withDisplayName } from './lib/display-name.js'
+import { rootListing } from './lib/root-listing.js'
 
 export { MikserAuthenticator, withStagedWrites, stageWrites }
 
@@ -46,6 +47,7 @@ export const writeCapability = (name) => `drive:${name}:write`
  *             data:    { folder: 'data', readOnly: true },
  *             Reports: { folder: 'reports' },            // shows as "Reports"
  *             q3:      { folder: 'q3', displayName: 'Q3 reports' },
+ *             share:   { folder: 'share', host: 'drive.example.com' },
  *         },
  *         auth: identity,
  *     })
@@ -66,6 +68,19 @@ export function drive(options = {}) {
     const {
         base      = '/drive',
         endpoints = {},
+        // A domain of its own. On it, `/` is the drive: a collection listing
+        // the endpoints the caller may read, with each endpoint mounted
+        // beneath it at `/<name>`.
+        //
+        // The Microsoft WebDAV redirector establishes its session against the
+        // SERVER ROOT before it touches the path, so a share at
+        // `<base>/<name>` on a site whose `/` is a static site is one Explorer
+        // may never reach. Given a host, `\\drive.example.com@SSL\` is the
+        // mount and the public site is untouched.
+        //
+        // The `<base>/<name>` surface is unchanged and still answers on every
+        // host — this adds a way in, it does not move the old one.
+        host,
         auth,
         realm     = 'mikser',
         // Nephele defaults both to 'meta-files', which writes sidecars INTO
@@ -122,6 +137,9 @@ export function drive(options = {}) {
                     'credentials travel base64-encoded, not encrypted. Serve over https, or ' +
                     'terminate TLS in front of mikser.', runtime.options.url)
             }
+
+            // What the drive's own root will list, if it has a host.
+            const rootEntries = []
 
             for (const [name, ep] of Object.entries(endpoints)) {
                 if (!ep.folder) {
@@ -209,7 +227,7 @@ export function drive(options = {}) {
                 // property is found and bound on either path.
                 fsAdapter.getOptionsResponseCacheControl = async () => 'no-cache'
 
-                app.use(mountPath, nepheleServer({
+                const mountServer = nepheleServer({
                     // Writes are staged to a sibling temp file and renamed.
                     // The adapter writes straight to the destination with
                     // open(path,'w'), which truncates immediately — so the
@@ -250,7 +268,24 @@ export function drive(options = {}) {
                     // in the authenticator, because Nephele resolves plugins
                     // BEFORE it authenticates and the hook cannot see the user.
                     plugins: readOnly ? [new ReadOnlyPlugin()] : [],
-                }))
+                })
+
+                app.use(mountPath, mountServer)
+
+                // The same server, reached from the drive's own domain.
+                // Scoped to the Host header, and that is not optional: mounted
+                // at `/<name>` for every host, it would shadow a real page.
+                if (host) {
+                    app.use(`/${name}`, (req, res, next) =>
+                        (req.hostname === host ? mountServer(req, res, next) : next()))
+                    // Named for the client with the same rule the mount uses,
+                    // so the listing and the folder agree.
+                    rootEntries.push({
+                        name,
+                        displayName: ep.displayName ?? name,
+                        capability:  readCapability(name),
+                    })
+                }
 
                 registerRoute({
                     path:         mountPath,
@@ -315,6 +350,37 @@ export function drive(options = {}) {
                     detail:       `(${ep.folder}${readOnly ? ', read-only' : ''})`,
                     authLabel:    verifier ? (verifier.name ?? 'auth')
                                            : (ep.allowRemote ? 'public, REMOTE OPEN' : 'loopback-only'),
+                })
+            }
+
+            // The drive's own root, last: it answers only for `/`, and only
+            // on its host, so it has to sit behind the endpoint mounts rather
+            // than in front of them.
+            if (host) {
+                app.use((req, res, next) =>
+                    (req.hostname === host
+                        ? rootListing({
+                            entries:  rootEntries,
+                            rootName: options.displayName ?? host,
+                            auth: {
+                                verifier:      resolveAuth(auth),
+                                allowRemote:   true,
+                                trustLoopback: !auth,
+                                realm,
+                            },
+                            logger,
+                        })(req, res, next)
+                        : next()))
+
+                registerRoute({
+                    path:         '/',
+                    host,
+                    plugin:       'drive',
+                    reachability: reachabilityOf({ auth: resolveAuth(auth), allowRemote: true }),
+                    methods:      ['OPTIONS', 'PROPFIND'],
+                    cors:         false,
+                    label:        'WebDAV root',
+                    detail:       `(${names.length} endpoint${names.length === 1 ? '' : 's'})`,
                 })
             }
 

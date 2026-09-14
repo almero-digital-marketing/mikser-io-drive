@@ -1,0 +1,181 @@
+// The drive's own root, on a domain of its own.
+//
+// The Microsoft WebDAV redirector establishes its session against the SERVER
+// ROOT before it touches the path. A share at `<base>/<name>` on a site whose
+// `/` is a static site is therefore one Explorer may never reach: it asks `/`,
+// gets a static site's answer, and stops — the leaf being correct makes no
+// difference. Measured on a live host: OPTIONS on the mount answered
+// `DAV: 1, 3, 2` while `dir \\host@SSL\DavWWWRoot\drive\SkinCheck\` still
+// failed, and it failed at the root.
+//
+// `drive({ host })` gives the drive a domain where `/` is the drive itself: a
+// collection whose children are the endpoints the caller may read. Each child
+// is the real mount, so entering one lands on that endpoint's own Nephele
+// server with its own authenticator — no virtual adapter, and no fake
+// directory tree to keep in step with the mount keys.
+//
+// Host-scoped, and that is not optional: mounted at `/` for every host, a
+// drive shadows every page on the site.
+
+import { describe, it, before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import bcrypt from 'bcryptjs'
+import http from 'node:http'
+
+import { runtime } from 'mikser-io'
+import { auth } from 'mikser-io-auth'
+import { drive } from '../index.js'
+
+const HOST = 'drive.example.test'
+let server, port, dir
+
+const as = (user) => 'Basic ' + Buffer.from(`${user}:${user}-pw`).toString('base64')
+
+// Raw http, not fetch.
+//
+// The Host header IS the test here — it is what decides whether this request
+// is for the drive's domain — and fetch() silently drops it: `Host` is a
+// forbidden header in undici, so every request went out as 127.0.0.1 and the
+// host gate correctly refused all of them. The first version of this file
+// failed for that reason and the code was fine.
+function request(method, urlPath, { host = HOST, headers = {} } = {}) {
+    return new Promise((resolve, reject) => {
+        const req = http.request(
+            { host: '127.0.0.1', port, path: urlPath, method, headers: { Host: host, ...headers } },
+            (res) => {
+                let body = ''
+                res.on('data', (chunk) => { body += chunk })
+                res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }))
+            })
+        req.on('error', reject)
+        req.end()
+    })
+}
+const propfind = (opts = {}) =>
+    request('PROPFIND', '/', { ...opts, headers: { depth: '1', ...(opts.headers ?? {}) } })
+
+before(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'mikser-drive-root-'))
+    for (const folder of ['documents', 'reports', 'media', 'runtime']) {
+        await mkdir(path.join(dir, folder), { recursive: true })
+    }
+    await writeFile(path.join(dir, 'documents/page.md'), '# hello\n')
+    await writeFile(path.join(dir, 'users.htpasswd'), ['alice', 'bob', 'carol']
+        .map(u => `${u}:${bcrypt.hashSync(`${u}-pw`, 10)}`).join('\n') + '\n')
+    await writeFile(path.join(dir, 'groups.htgroup'),
+        'editors: alice\nreviewers: bob\nowners: carol\n')
+
+    const { default: express } = await import('express')
+    const app = express()
+    runtime.options = { ...runtime.options, app, workingFolder: dir, runtimeFolder: path.join(dir, 'runtime') }
+    runtime.config = { ...runtime.config }
+    runtime.engine = { ...runtime.engine, logger: { info(){}, warn(){}, error(){}, debug(){}, trace(){}, fatal(){} } }
+
+    const identity = auth({
+        capabilities: {
+            editors:   ['drive:SkinCheck'],          // alice: one endpoint
+            reviewers: ['drive:Reports'],            // bob: a different one
+            owners:    ['*'],                        // carol: all of them
+        },
+    })
+    const plugin = drive({
+        host: HOST,
+        auth: identity,
+        endpoints: {
+            SkinCheck: { folder: 'documents' },
+            Reports:   { folder: 'reports' },
+            Media:     { folder: 'media', displayName: 'Media library' },
+        },
+    })
+
+    const load = [], loaded = []
+    const core = {
+        runtime,
+        onLoad:    (cb) => load.push(cb),
+        onLoaded:  (cb) => loaded.push(cb),
+        useLogger: () => ({ info(){}, warn(){}, error(){}, debug(){}, trace(){} }),
+    }
+    identity(core)
+    plugin(core)
+    for (const cb of load)   await cb()
+    for (const cb of loaded) await cb()
+
+    server = await new Promise(resolve => { const s = app.listen(0, () => resolve(s)) })
+    port = server.address().port
+})
+
+after(async () => {
+    server?.closeAllConnections?.()
+    await new Promise(r => server?.close(r))
+    await rm(dir, { recursive: true, force: true })
+})
+
+describe('the drive root on its own host', () => {
+    it('announces itself as WebDAV, which is what the redirector asks first', async () => {
+        // Answered without credentials on purpose: this is discovery, and it
+        // is what the redirector asks BEFORE it has anything to offer. It
+        // discloses that a DAV server is here and nothing about what is in it.
+        const res = await request('OPTIONS', '/')
+        assert.equal(res.status, 200)
+        assert.match(res.headers.dav ?? '', /\b1\b/, 'the root must claim class 1')
+        assert.match(res.headers.allow ?? '', /PROPFIND/)
+        assert.equal(res.headers['cache-control'], 'no-cache',
+            'a discovery answer that can be cached is one a client keeps refusing')
+    })
+
+    it('challenges an anonymous listing, so a DAV client prompts', async () => {
+        const res = await propfind()
+        assert.equal(res.status, 401)
+        assert.match(res.headers['www-authenticate'] ?? '', /^Basic /,
+            'Basic is the only scheme Explorer and Finder speak')
+    })
+
+    it('lists only the endpoints the user may read', async () => {
+        const xml = (await propfind({ headers: { authorization: as('alice') } })).body
+        assert.match(xml, /<D:href>\/SkinCheck\/<\/D:href>/, xml)
+        assert.doesNotMatch(xml, /Reports/, 'bob\'s endpoint is not alice\'s to see')
+        assert.doesNotMatch(xml, /Media/, 'nor one nobody granted her')
+    })
+
+    it('shows a different user a different drive', async () => {
+        const xml = (await propfind({ headers: { authorization: as('bob') } })).body
+        assert.match(xml, /<D:href>\/Reports\/<\/D:href>/, xml)
+        assert.doesNotMatch(xml, /SkinCheck/, xml)
+    })
+
+    it('gives a wildcard holder everything, under its display name', async () => {
+        const xml = (await propfind({ headers: { authorization: as('carol') } })).body
+        for (const name of ['SkinCheck', 'Reports', 'Media']) {
+            assert.match(xml, new RegExp(`<D:href>/${name}/</D:href>`), `${name} missing:\n${xml}`)
+        }
+        assert.match(xml, /<D:displayname>Media library<\/D:displayname>/,
+            'the listing uses the same name the mount reports')
+    })
+
+    it('describes only itself at Depth 0', async () => {
+        const xml = (await propfind({ headers: { authorization: as('carol'), depth: '0' } })).body
+        assert.match(xml, /<D:href>\/<\/D:href>/)
+        assert.doesNotMatch(xml, /SkinCheck/, 'Depth 0 is the collection, not its children')
+    })
+
+    it('leaves every other host alone', async () => {
+        // The whole safety of mounting at `/`. Without the Host gate a drive
+        // shadows every page on the site.
+        for (const method of ['OPTIONS', 'PROPFIND']) {
+            const res = await request(method, '/', { host: 'www.example.test', headers: { depth: '1' } })
+            assert.notEqual(res.status, 207, `${method} answered for the wrong host`)
+            assert.equal(res.headers.dav, undefined, `${method} advertised DAV to the wrong host`)
+        }
+    })
+
+    it('serves the endpoint itself beneath the root', async () => {
+        const res = await request('PROPFIND', '/SkinCheck/', {
+            headers: { depth: '1', authorization: as('alice') },
+        })
+        assert.equal(res.status, 207, res.body)
+        assert.match(res.body, /page\.md/, 'entering an endpoint reaches its real files')
+    })
+})

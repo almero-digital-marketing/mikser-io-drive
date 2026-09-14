@@ -149,6 +149,47 @@ creates an empty file** (RFC 4918 §9.10.4). A client that locks before writing
 — Finder's Save As does — leaves an empty document behind even if the write
 never arrives.
 
+## A domain of its own, and what Windows needs
+
+Explorer cannot map a share that lives at `<base>/<name>` on a site whose `/` is
+a static site. The Microsoft WebDAV redirector establishes its session against
+the **server root** before it touches the path: it asks `/`, gets the site's
+answer, and stops — the mount being correct makes no difference. Measured on a
+live host, `OPTIONS /drive/SkinCheck/` answered `DAV: 1, 3, 2` while
+`dir \\host@SSL\DavWWWRoot\drive\SkinCheck\` still failed, and it failed at
+the root.
+
+Give the drive a domain and `/` is the drive:
+
+```js
+drive({
+    host: 'drive.example.com',
+    auth: identity,
+    endpoints: {
+        SkinCheck: { folder: 'skincheck' },
+        Reports:   { folder: 'reports' },
+    },
+})
+```
+
+`\\drive.example.com@SSL\` now mounts, and `/` is a collection whose children
+are the endpoints **that caller may read** — filtered by the same
+`drive:<name>` capability that guards the endpoint itself, so two people
+mapping the same drive see different folders in it. Entering one lands on that
+endpoint's own server with its own authenticator; the root is a listing, not a
+proxy.
+
+`OPTIONS /` is answered without credentials, because that is what the
+redirector asks before it has any to offer — it discloses that a DAV server is
+here and nothing about what is in it. The listing is the gated part.
+
+Scoped to the Host header, and that is not optional: mounted at `/` for every
+host, a drive would shadow every page on the site. Requests for any other host
+fall straight through.
+
+The `<base>/<name>` surface is unchanged and still answers on every host. This
+adds a way in; it does not move the old one.
+
 ## What the folder is called
 
 The endpoint key is the name, and the mount reports it as `displayname`:
