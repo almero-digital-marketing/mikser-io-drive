@@ -140,16 +140,61 @@ describe('host in the wrong place', () => {
 })
 
 describe('the drive root on its own host', () => {
-    it('announces itself as WebDAV, which is what the redirector asks first', async () => {
-        // Answered without credentials on purpose: this is discovery, and it
-        // is what the redirector asks BEFORE it has anything to offer. It
-        // discloses that a DAV server is here and nothing about what is in it.
+    it('challenges an anonymous OPTIONS, so the session authenticates at the root', async () => {
+        // This used to answer 200 without credentials, and that is what cost
+        // Windows its stored credential. The redirector builds its session
+        // against the SERVER ROOT before it touches the path; told the root
+        // needed nothing, it established the session anonymously and attached
+        // credentials only reactively at the PROPFIND 401. That attachment did
+        // not survive a reboot or WebClient's idle teardown — the redirector
+        // asked again, got the same clean 200, and prompted a human rather
+        // than replaying Credential Manager, with the credential sitting in
+        // cmdkey the whole time.
+        //
+        // Apache mod_dav inside `Require valid-user` 401s here, and reconnects
+        // there are silent.
         const res = await request('OPTIONS', '/')
+        assert.equal(res.status, 401)
+        assert.match(res.headers['www-authenticate'] ?? '', /^Basic /,
+            'Basic is the only scheme Explorer and Finder speak')
+    })
+
+    it('announces itself as WebDAV once the request authenticates', async () => {
+        const res = await request('OPTIONS', '/', { headers: { authorization: as('alice') } })
         assert.equal(res.status, 200)
-        assert.match(res.headers.dav ?? '', /\b1\b/, 'the root must claim class 1')
         assert.match(res.headers.allow ?? '', /PROPFIND/)
+        assert.equal(res.headers['ms-author-via'], 'DAV')
         assert.equal(res.headers['cache-control'], 'no-cache',
             'a discovery answer that can be cached is one a client keeps refusing')
+    })
+
+    it('advertises the same compliance classes as the endpoints beneath it', async () => {
+        // Finder refuses a read-write mount without class 2, and both it and
+        // the redirector read capability at the ROOT and decide the whole
+        // mount from it. Deliberately more than this resource can do on its
+        // own — RFC 4918 §18.2 wants LOCK from a class 2 resource and `Allow`
+        // says this one serves OPTIONS and PROPFIND. See respondOptions.
+        const res = await request('OPTIONS', '/', { headers: { authorization: as('alice') } })
+        for (const compliance of ['1', '2', '3']) {
+            assert.match(res.headers.dav ?? '', new RegExp(`\\b${compliance}\\b`),
+                `the root must claim class ${compliance}, as the endpoints do`)
+        }
+    })
+
+    it('keeps Allow truthful about what the root itself serves', async () => {
+        // The other half of advertising class 2: a client that asks what this
+        // resource permits must not be told it can LOCK here.
+        const res = await request('OPTIONS', '/', { headers: { authorization: as('alice') } })
+        assert.doesNotMatch(res.headers.allow ?? '', /LOCK/,
+            'the root is read-only and must say so')
+    })
+
+    it('answers an authenticated OPTIONS on the listing too', async () => {
+        // The 207 carries a DAV header of its own, and a client reading class
+        // from either answer must get the same story.
+        const res = await propfind({ headers: { authorization: as('alice') } })
+        assert.equal(res.status, 207)
+        assert.match(res.headers.dav ?? '', /\b2\b/)
     })
 
     it('challenges an anonymous listing, so a DAV client prompts', async () => {
@@ -157,6 +202,32 @@ describe('the drive root on its own host', () => {
         assert.equal(res.status, 401)
         assert.match(res.headers['www-authenticate'] ?? '', /^Basic /,
             'Basic is the only scheme Explorer and Finder speak')
+    })
+
+    it('challenges an unknown user, which is what a challenge is for', async () => {
+        const res = await request('OPTIONS', '/', { headers: { authorization: as('dave') } })
+        assert.equal(res.status, 401)
+    })
+
+    it('accepts a bearer-carrying client at the root', async () => {
+        // rclone and curl carry a token rather than Basic. Challenging
+        // OPTIONS must not turn them away — the verifier already accepts
+        // them, and OPTIONS now goes through the same verifier PROPFIND does.
+        const listing = await propfind({ headers: { authorization: as('carol') } })
+        assert.equal(listing.status, 207, 'precondition: this principal can list')
+        const res = await request('OPTIONS', '/', { headers: { authorization: as('carol') } })
+        assert.equal(res.status, 200, 'the same credentials must satisfy OPTIONS')
+    })
+
+    it('leaves the endpoint mounts beneath it untouched', async () => {
+        // A different code path — the Nephele mounts, not this middleware —
+        // and the report asked for it to stay exactly as it was.
+        const res = await request('OPTIONS', '/SkinCheck',
+            { headers: { authorization: as('alice') } })
+        assert.equal(res.status, 200)
+        for (const compliance of ['1', '2']) {
+            assert.match(res.headers.dav ?? '', new RegExp(`\\b${compliance}\\b`))
+        }
     })
 
     it('lists only the endpoints the user may read', async () => {

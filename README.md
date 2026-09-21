@@ -209,6 +209,54 @@ fall straight through.
 The `<base>/<name>` surface is unchanged and still answers on every host. This
 adds a way in; it does not move the old one.
 
+### The root authenticates, and why that keeps your password
+
+`OPTIONS /` on the drive host answers **401 with a Basic challenge** unless the
+request already authenticates. That is not a hardening pass; it is what keeps a
+Windows client's stored credential usable.
+
+The redirector builds its session against the server root before it touches the
+path. An anonymous `200` there told it the session needed nothing, so
+credentials were attached later and reactively, when the `PROPFIND` came back
+401. That attachment did not survive the session: after a reboot, or after
+WebClient's idle teardown, the redirector asked again, got the same clean 200,
+reached the same conclusion, and at the PROPFIND prompted a human instead of
+replaying Credential Manager — with the credential sitting in `cmdkey` the
+whole time, and "Remember my credentials" making no difference. Apache
+`mod_dav` inside `Require valid-user` returns 401 on OPTIONS, and reconnects
+there are silent.
+
+Nothing was being protected by the anonymous answer: a `200` says "a WebDAV
+server is here", and a `401` says the same thing plus a realm. The endpoint
+names — the part that discloses something — were gated then and are gated now.
+
+If you have a health check or monitor pointed at `/`, keep the old answer:
+
+```js
+drive({ host: 'drive.example.com', anonymousDiscovery: true, … })
+```
+
+That relaxes discovery only. `PROPFIND /` still requires credentials.
+
+### Compliance classes at the root
+
+The root advertises `DAV: 1, 2, 3` — the same classes as the endpoints
+beneath it — and that is deliberately more than this one resource can do on
+its own.
+
+RFC 4918 §18 defines the classes per **resource**, and §18.2 wants LOCK from a
+class 2 resource. The root is a read-only listing: its `Allow` says
+`OPTIONS, PROPFIND` and means it, and §18.3 spells out the strictly honest
+header for that situation, `DAV: 1, 3`.
+
+It claims 2 anyway because the clients this package exists for read capability
+at the **root** and decide the whole mount from it — Finder refuses a
+read-write mount without class 2, which is also why `locks: 'disallow'` carries
+a warning. Understating there costs a working mount; overstating costs a 405 to
+a LOCK nothing sends, since clients lock the files they edit and those live
+under the endpoints, which support locking for real. `Allow` stays truthful, so
+a client that asks what the root itself permits gets the right answer.
+
 ## What the folder is called
 
 The endpoint key is the name, and the mount reports it as `displayname`:

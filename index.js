@@ -123,6 +123,14 @@ export function drive(options = {}) {
         // read-write mount without it.
         properties = 'emulate',
         locks      = 'emulate',
+        // Answer OPTIONS at the host root without authentication.
+        //
+        // Off, because an anonymous 200 there costs Windows its stored
+        // credential: the redirector builds its session at the root, is told
+        // it needs nothing, and re-prompts after every reboot and every idle
+        // teardown. See lib/root-listing.js. Turn it on for a deployment
+        // that wants an unauthenticated probe at `/`.
+        anonymousDiscovery = false,
     } = options
 
     return ({ runtime, onLoaded, useLogger }) => {
@@ -403,6 +411,7 @@ export function drive(options = {}) {
                                 realm,
                             },
                             logger,
+                            anonymousDiscovery,
                         })(req, res, next)
                         : next()))
 
