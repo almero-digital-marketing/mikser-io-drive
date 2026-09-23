@@ -101,8 +101,12 @@ describe('auth', () => {
     it('challenges an anonymous request with Basic, so a DAV client prompts', async () => {
         const res = await dav('PROPFIND', '/drive/content/', { headers: { depth: '0' } })
         assert.equal(res.status, 401)
-        assert.match(res.headers.get('www-authenticate'), /^Basic realm="mikser"/)
-        assert.match(res.headers.get('www-authenticate'), /charset="UTF-8"/)
+        // Exact bytes, because the parameter that is NOT here is the point.
+        // `charset="UTF-8"` is advisory (RFC 7617 §2.1) and the Windows
+        // WebDAV redirector appears not to parse it — a mapped drive carrying
+        // it never reconnects from stored credentials. See basicChallenge in
+        // mikser-io; a deployment that wants it sets `basicCharset` on auth.
+        assert.equal(res.headers.get('www-authenticate'), 'Basic realm="mikser"')
     })
 
     it('refuses a wrong password', async () => {

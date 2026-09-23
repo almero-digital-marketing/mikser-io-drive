@@ -209,6 +209,21 @@ describe('the drive root on its own host', () => {
         assert.equal(res.status, 401)
     })
 
+    it('challenges with the exact bytes this deployment configured', async () => {
+        // Exact, because the parameter that is NOT here is the finding:
+        // `charset="UTF-8"` is advisory (RFC 7617 §2.1) and the Windows
+        // WebDAV redirector appears not to parse it — a mapped drive carrying
+        // it never reconnects from stored credentials. The root follows the
+        // auth plugin's choice rather than carrying a knob of its own, and
+        // this fixture leaves it at the default.
+        for (const method of ['OPTIONS', 'PROPFIND']) {
+            const res = await request(method, '/', { headers: { depth: '1' } })
+            assert.equal(res.status, 401, `${method} must challenge`)
+            assert.equal(res.headers['www-authenticate'], 'Basic realm="mikser"',
+                `${method} must not carry charset unless asked`)
+        }
+    })
+
     it('accepts a bearer-carrying client at the root', async () => {
         // rclone and curl carry a token rather than Basic. Challenging
         // OPTIONS must not turn them away — the verifier already accepts

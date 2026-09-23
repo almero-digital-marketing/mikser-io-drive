@@ -48,6 +48,27 @@ const insufficient = {
 // Presented a credential, rejected, no refinement — the ordinary 401.
 const invalid = { verify: async () => false }
 
+// A verifier that throws — a store that cannot be read, a hash library that
+// blew up. The root answers 401 rather than 500, because a client that can
+// retry with credentials is more use than a stack trace, and this branch has
+// its own `res.set` call that a mutation can change independently of the
+// ordinary one.
+const throwing = { verify: async () => { throw new Error('store unreadable') } }
+
+describe('when the verifier itself fails', () => {
+    for (const method of ['OPTIONS', 'PROPFIND']) {
+        it(`challenges with the configured bytes on ${method}`, async () => {
+            const res = fakeResponse()
+            await middleware(throwing)(request(method), res, () => {
+                assert.fail('the root must answer, not fall through')
+            })
+            assert.equal(res.statusCode, 401)
+            assert.equal(res.headers['www-authenticate'], 'Basic realm="mikser"',
+                'the error path must not carry a parameter the happy path omits')
+        })
+    }
+})
+
 describe('an authenticated caller who is not permitted', () => {
     for (const method of ['OPTIONS', 'PROPFIND']) {
         it(`gets 403 and no challenge on ${method}`, async () => {

@@ -238,6 +238,24 @@ drive({ host: 'drive.example.com', anonymousDiscovery: true, … })
 
 That relaxes discovery only. `PROPFIND /` still requires credentials.
 
+### The Basic challenge follows your auth configuration
+
+The drive writes its own `WWW-Authenticate: Basic` header rather than
+delegating to the verifier — a composite verifier challenges with whichever
+member can be satisfied interactively, and where OAuth discovery is configured
+that is Bearer, which Explorer and Finder do not speak.
+
+The `charset="UTF-8"` parameter is not a decision this package makes. It reads
+`basicCharset` from the auth plugin, so a deployment sets it once:
+
+```js
+auth({ basicCharset: true })   // off by default
+```
+
+Off matters here: the Windows WebDAV redirector appears not to parse the
+parameter, and a mapped drive whose challenge carries it never reconnects from
+stored credentials. See the auth package's README for the measurement.
+
 ### Compliance classes at the root
 
 The root advertises `DAV: 1, 2, 3` — the same classes as the endpoints
