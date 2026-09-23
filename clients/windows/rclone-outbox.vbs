@@ -57,8 +57,19 @@ logFile = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%\rclone\outbox.log")
 ' --min-age keeps a file that is still being written out of the transfer. The
 ' exporting application is long finished with it by the time it ages in, and a
 ' half-written document uploaded and then deleted locally is unrecoverable.
+' --ignore-times because the server reports no modification-time support
+' (rclone prints a Precision of 100 years for it), which leaves size as the
+' only thing rclone can compare. A re-export under the same name and the same
+' size - a corrected document for the same patient and date - would otherwise
+' be treated as already uploaded, skipped, and deleted locally. Measured: a
+' 3.773 MiB export was removed with "There was nothing to transfer".
+'
+' It costs nothing here. move empties the outbox, so a document is offered
+' once and uploaded once; this only removes a skip decision that cannot be
+' made safely.
 command = """" & rclone & """ move """ & outbox & """ " & remote & _
-          " --min-age 1m --transfers 2 --log-level INFO --log-file """ & logFile & """"
+          " --min-age 1m --ignore-times --transfers 2" & _
+          " --log-level INFO --log-file """ & logFile & """"
 
 Do
     ' 0 hides the window; True waits for the run to finish, so a slow upload
