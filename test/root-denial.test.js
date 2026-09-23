@@ -63,8 +63,8 @@ describe('when the verifier itself fails', () => {
                 assert.fail('the root must answer, not fall through')
             })
             assert.equal(res.statusCode, 401)
-            assert.equal(res.headers['www-authenticate'], 'Basic realm="mikser"',
-                'the error path must not carry a parameter the happy path omits')
+            assert.equal(res.headers['www-authenticate'], 'Basic realm="mikser", charset="UTF-8"',
+                'the error path must emit what the happy path emits, not its own header')
         })
     }
 })

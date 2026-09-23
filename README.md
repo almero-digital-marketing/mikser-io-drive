@@ -249,12 +249,11 @@ The `charset="UTF-8"` parameter is not a decision this package makes. It reads
 `basicCharset` from the auth plugin, so a deployment sets it once:
 
 ```js
-auth({ basicCharset: true })   // off by default
+auth({ basicCharset: false })   // on by default
 ```
 
-Off matters here: the Windows WebDAV redirector appears not to parse the
-parameter, and a mapped drive whose challenge carries it never reconnects from
-stored credentials. See the auth package's README for the measurement.
+It briefly defaulted off on a theory about the Windows redirector that did not
+survive measurement. See the auth package's README.
 
 ### Compliance classes at the root
 

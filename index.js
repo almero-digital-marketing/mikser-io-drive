@@ -71,9 +71,9 @@ export const writeCapability = (name) => `drive:${name}:write`
 // Does this deployment's auth want charset="UTF-8" on the Basic challenge?
 //
 // Asked of the auth plugin rather than configured here, so the decision is
-// made once per deployment. mikser-io-auth exposes `basicCharset`; anything
-// else — a bare static token, no auth at all — has no opinion, and the
-// default is off.
+// made once per deployment. mikser-io-auth exposes `basicCharset` and
+// defaults it ON; anything else — a bare static token, no auth at all — has
+// no opinion, and falls back to the same default rather than to silence.
 //
 // Not delegated to the verifier's own `challenge()`, which would be the
 // tidier shape: a composite verifier challenges with whichever member can be
@@ -81,7 +81,7 @@ export const writeCapability = (name) => `drive:${name}:write`
 // Bearer. Explorer and Finder speak Basic and nothing else, so the scheme
 // here is not negotiable — only the parameter is.
 function basicCharsetOf(auth) {
-    return Boolean(auth?.basicCharset)
+    return auth?.basicCharset ?? true
 }
 
 export function drive(options = {}) {
@@ -103,15 +103,10 @@ export function drive(options = {}) {
         host,
         auth,
         realm     = 'mikser',
-        // `charset="UTF-8"` on the Basic challenge, RFC 7617 §2.1.
-        //
-        // Not a knob of this package's own: it follows whatever the auth
-        // plugin was configured with, so a deployment decides it once. Given
-        // a bare token or no auth there is nothing to follow and it stays
-        // off, which is the safe answer — the Windows WebDAV redirector
-        // appears not to parse the parameter, and a mapped drive carrying it
-        // never reconnects from stored credentials. See basicChallenge in
-        // mikser-io.
+        // `charset="UTF-8"` on the Basic challenge, RFC 7617 §2.1, is not a
+        // knob of this package's own: it follows whatever the auth plugin was
+        // configured with, so a deployment decides it once. See
+        // basicChallenge in mikser-io for why the default is on.
         // Nephele defaults both to 'meta-files', which writes sidecars INTO
         // the folder being served. The sidecars are filtered out of the
         // catalog now (see registerJunk above), so the remaining reason to

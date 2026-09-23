@@ -219,8 +219,8 @@ describe('the drive root on its own host', () => {
         for (const method of ['OPTIONS', 'PROPFIND']) {
             const res = await request(method, '/', { headers: { depth: '1' } })
             assert.equal(res.status, 401, `${method} must challenge`)
-            assert.equal(res.headers['www-authenticate'], 'Basic realm="mikser"',
-                `${method} must not carry charset unless asked`)
+            assert.equal(res.headers['www-authenticate'], 'Basic realm="mikser", charset="UTF-8"',
+                `${method} must carry what this deployment's auth configured`)
         }
     })
 
