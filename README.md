@@ -274,6 +274,45 @@ a LOCK nothing sends, since clients lock the files they edit and those live
 under the endpoints, which support locking for real. `Allow` stays truthful, so
 a client that asks what the root itself permits gets the right answer.
 
+### When Windows cannot keep the mount
+
+Everything above gets Explorer to mount the drive. Keeping it mounted across a
+restart is a separate problem, and on a machine that has to run unattended it
+is not solvable from this side.
+
+The redirector reads saved credentials from the **Domain Password** store.
+Basic credentials cannot be persisted there — [KB 2673544][kb] documents this
+as by design, because WinHTTP cannot retrieve a saved Basic credential — so
+"remember my credentials" quietly stores nothing the reconnect can use. It
+looks like a server fault and is not one. Measured against a live endpoint,
+a reconnect sent four requests, **none** of them carrying an `Authorization`
+header, and gave up; the credential was sitting in Credential Manager the whole
+time, in the `Generic` store that `cmdkey /generic:` writes and the redirector
+never reads. Apache `mod_dav` on the same host, with the same credential,
+failed identically — which is the useful part of the measurement.
+
+So for a machine that exports documents on its own, do not mount the drive.
+Have the application write to a local folder and push that folder up:
+
+```
+wscript rclone-outbox.vbs "C:\SkinCheck" SkinCheck:Janus 120
+```
+
+[`clients/windows/rclone-outbox.vbs`](clients/windows/rclone-outbox.vbs) is
+that loop — an [rclone][rclone] `move` on an interval, run by `wscript.exe` so
+no console window appears, and started by a shortcut in `shell:startup` so it
+needs no elevation and no Scheduled Task. rclone authenticates from its own
+config on every request and has no reconnect to lose, which is the whole reason
+it works where the mount does not.
+
+This trades a drive letter for a folder, and it is worth being clear about what
+that costs: nobody browses the server from the machine any more. In exchange an
+export can no longer fail because a mount dropped, and a server that is
+unreachable delays the upload instead of losing the document.
+
+[kb]: https://support.microsoft.com/help/2673544
+[rclone]: https://rclone.org/webdav/
+
 ## What the folder is called
 
 The endpoint key is the name, and the mount reports it as `displayname`:
