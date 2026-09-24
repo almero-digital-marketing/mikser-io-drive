@@ -124,11 +124,17 @@ before(async (t) => {
         + '    ],\n'
         + '})\n')
 
+    // `detached` so this gets its own process GROUP, which is what the
+    // teardown kills. mikser under --watch --server runs render workers, and
+    // they inherit the pipes below: signalling the parent alone can leave a
+    // worker holding the write end open, which keeps THIS process's read
+    // handles alive and the test run never ends. Killing the group takes the
+    // whole tree.
     server = spawn(process.execPath, [
         path.join(dir, 'node_modules/mikser-io/app.js'),
         '--working-folder', dir, '--output-folder', 'out', '--runtime-folder', 'runtime',
         '--watch', '--server', String(PORT), '--url', `http://127.0.0.1:${PORT}`,
-    ], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
+    ], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
 
     // Kept so a server that never comes up says WHY. Throwing this away left
     // the failure as a bare ECONNREFUSED, which names the symptom and hides
@@ -155,6 +161,15 @@ before(async (t) => {
     await new Promise(r => setTimeout(r, 3000))
 })
 
+// Signal the whole process GROUP, not just the child.
+//
+// `detached: true` above put the server in its own group, so a negative pid
+// reaches it and everything it started. Falls back to the child alone if the
+// group is already gone, which is the ordinary case and not an error.
+function killTree(child, signal) {
+    try { process.kill(-child.pid, signal) } catch { try { child.kill(signal) } catch { /* already gone */ } }
+}
+
 after(async () => {
     // WAIT for it to die, and escalate. `kill()` only sends the signal; the
     // child's stdout/stderr are pipes we hold, so until it actually exits
@@ -167,16 +182,30 @@ after(async () => {
     // close() does not come back.
     if (server && server.exitCode === null && server.signalCode === null) {
         const exited = new Promise(resolve => server.once('exit', resolve))
-        server.kill()
+        killTree(server, 'SIGTERM')
         const inTime = await Promise.race([
             exited.then(() => true),
             new Promise(resolve => setTimeout(() => resolve(false), 5000)),
         ])
         if (!inTime) {
-            server.kill('SIGKILL')
-            await exited
+            killTree(server, 'SIGKILL')
+            // Bounded. `await exited` alone assumes the child is the only
+            // thing that can hold this up, and the whole failure being fixed
+            // here is that it is not.
+            await Promise.race([
+                exited,
+                new Promise(resolve => setTimeout(resolve, 5000)),
+            ])
         }
     }
+    // The pipes, explicitly, and this is the actual fix rather than belt and
+    // braces. A worker that inherited the write end keeps this side readable
+    // even once the server is gone, and a readable stream handle is enough to
+    // keep node alive: every test passes, nothing is left to run, and the
+    // process simply sits there. On CI that was fifteen minutes of silence
+    // ended by the job timeout and "Terminate orphan process", twice.
+    server?.stdout?.destroy()
+    server?.stderr?.destroy()
     if (dir) await rm(dir, { recursive: true, force: true })
 })
 
