@@ -67,8 +67,20 @@ logFile = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%\rclone\outbox.log")
 ' It costs nothing here. move empties the outbox, so a document is offered
 ' once and uploaded once; this only removes a skip decision that cannot be
 ' made safely.
+'
+' --min-size 1 keeps an empty file out of the transfer entirely. An
+' exporting application that fails can leave a 0-byte document behind, and
+' uploading one is worse than doing nothing: it looks like a delivered
+' document, it replaces nothing useful, and whatever consumes the folder on
+' the server has to decide what an empty document means. Measured on a live
+' clinic: three 0-byte exports reached the server in two days and each one
+' became a client with no report and no notification, discovered a day later.
+'
+' Held back rather than dropped, the file stays in the outbox, the folder
+' stops being empty, and the person at the machine can see that an export
+' did not work while the client is still in front of them.
 command = """" & rclone & """ move """ & outbox & """ " & remote & _
-          " --min-age 1m --ignore-times --transfers 2" & _
+          " --min-age 1m --min-size 1 --ignore-times --transfers 2" & _
           " --log-level INFO --log-file """ & logFile & """"
 
 Do
