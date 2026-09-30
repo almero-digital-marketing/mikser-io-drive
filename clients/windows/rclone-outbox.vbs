@@ -68,7 +68,9 @@ logFile = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%\rclone\outbox.log")
 ' once and uploaded once; this only removes a skip decision that cannot be
 ' made safely.
 '
-' --min-size 1 keeps an empty file out of the transfer entirely. An
+' --min-size 1B keeps an empty file out of the transfer entirely. The
+' suffix is not optional: rclone reads a bare --min-size in KiB, so a
+' plain 1 would silently hold back everything under 1024 bytes. An
 ' exporting application that fails can leave a 0-byte document behind, and
 ' uploading one is worse than doing nothing: it looks like a delivered
 ' document, it replaces nothing useful, and whatever consumes the folder on
@@ -80,7 +82,7 @@ logFile = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%\rclone\outbox.log")
 ' stops being empty, and the person at the machine can see that an export
 ' did not work while the client is still in front of them.
 command = """" & rclone & """ move """ & outbox & """ " & remote & _
-          " --min-age 1m --min-size 1 --ignore-times --transfers 2" & _
+          " --min-age 1m --min-size 1B --ignore-times --transfers 2" & _
           " --log-level INFO --log-file """ & logFile & """"
 
 Do
